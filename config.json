@@ -1,0 +1,6 @@
+{
+  "cosyvoice": {
+    "model": "cosyvoice-v3.5-plus",
+    "voice_id": ""
+  }
+}

@@ -1,0 +1,59 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.codex_venv/
+venv/
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Runtime state and generated jobs
+runtime/
+*.log
+*.pid
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+config/.secret.key
+config/secrets.bin
+config/user_config.json
+config/concurrency_profile.json
+voice_dabao_bailian.json
+
+# Downloaded third-party binaries
+tools/ffmpeg/
+
+# Video, audio, subtitles, and generated edit artifacts
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.wav
+*.mp3
+*.aac
+*.srt
+_source_*.json
+_drama_script_table.json
+_narration_manifest.json
+_anchored_*
+_gpt_sovits_jobs*.json
+★*
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.tmp
+*.bak
