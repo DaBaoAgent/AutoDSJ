@@ -9,12 +9,7 @@ __pycache__/
 .codex_venv/
 venv/
 
-# Frontend dependencies and build output
-frontend/node_modules/
-frontend/dist/
-frontend/*.tsbuildinfo
-
-# Runtime state and generated jobs
+# Runtime state and generated output
 runtime/
 *.log
 *.pid

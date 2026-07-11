@@ -1,27 +1,105 @@
-# DaobaoAI-DY 电视剧全自动智能剪辑工厂
+# DY 工作流 · 电视剧/短剧全自动智能剪辑（纯后端）
 
-本项目只保留电视剧手写解说文案成片管线。
+DY 工作流是一套面向电视剧解说、短剧二创与影视口播的 AI 智能剪辑管线。
+它把**原片 + SRT/ASS 字幕 + 人工「原片/解说」文案**组合起来，经过视觉识别、
+字幕定位、广告过滤、AI 克隆配音、精准画面匹配与自动成片，产出一条成片视频。
 
-## 使用流程
+本版本**已移除所有前端 WebUI 与端口服务**，只保留纯后端命令行工作流，
+由 Hermes 智能体驱动使用：对 Hermes 说「**DY**」即自动进入本工作流。
 
-1. 上传一部 MP4/MKV 原片、一份 SRT/ASS 字幕和一份含“原片：/解说：”段落的文案；每项上传后会单独检测并显示绿色通过状态。
-2. 点击“生成脚本表”，系统校验完整素材并逐行定位“原片：”中的指定对白。分散在同一场戏里的指定台词会剪成多个精确小片段，不会从首句连续播放到末句。
-3. 点击“按上传文案成片”。系统先按完整解说段克隆音色，再沿自然停顿拆成语义分镜，使用视觉索引匹配人物、动作和场景。
-4. 原片段与解说段共用全局镜头占用表，任何原片区间都不会在解说中复用，解说镜头之间也不会复用。
-5. 视觉索引中的广告、品牌植入和字幕商业话术会自动合并为广告禁区，原片与解说画面默认都不会使用。
+## 一条正式管线
 
-## 音频规则
-
-- 播放原片时：原片音量默认 100%，无配音。
-- 播放解说时：原片音量默认 0%，配音音量 100%。
-- GPT-SoVITS 正式成片使用界面里的手动调音参数，包括语速、随机种子、分句方式、采样温度、Top-P、Top-K、重复惩罚和音频美化。
-- GPT-SoVITS 试听与正式成片统一使用自动 CUDA 和相同调音参数。
-- 同一解说段只克隆一次音色；分镜只读取整段音频的不同时间片，不会为短句反复克隆。
-
-## 启动
-
-```powershell
-python launch_dabaoai.py
+```
+素材文件夹（原片 + 字幕 + 原片/解说文案）
+  → 检测素材 → 视觉识别 → 生成脚本表 → 配音 + 剪辑 + 后处理 → ★ 成片.mp4
 ```
 
-WebUI 地址：`http://127.0.0.1:7861/`
+## 快速开始
+
+```bash
+# 环境自检（ffmpeg / 依赖 / API Key）
+python dy.py doctor
+
+# 一键全流程（首次或换素材时指定文件夹）
+python dy.py run --folder "D:\自动剪辑\某剧\第3集"
+
+# 之后同一素材可直接
+python dy.py run
+```
+
+Windows 可直接双击 `DY.bat`（会用项目 `.venv` 跑 `dy.py run`）。
+
+## 命令一览
+
+| 命令 | 作用 |
+|------|------|
+| `dy.py run` | 一键全流程：检测 → 视觉 → 脚本表 → 成片 |
+| `dy.py detect` | 检测素材（原片/字幕/文案是否齐全） |
+| `dy.py visual` | 运行视觉识别，建立视觉索引（`--force` 重跑） |
+| `dy.py script` | 生成脚本表（对齐字幕与文案） |
+| `dy.py status` | 查看当前工作流进度 |
+| `dy.py config` | 打印当前配置（API Key 掩码） |
+| `dy.py set --folder <路径>` | 设置素材文件夹（也可设分辨率/视觉模型） |
+| `dy.py set-key --dashscope <KEY>` | 加密保存 API Key |
+| `dy.py doctor` | 环境自检 |
+
+`run` 默认复用已有视觉索引；`--force-visual` 强制重跑，`--skip-visual` 跳过（需已有索引）。
+
+## 素材准备
+
+在素材文件夹里放三类文件（文件名可含「原片/字幕/解说文案」等关键字，程序会自动识别）：
+
+1. **原片**：`*.mp4` / `*.mkv` / `*.mov`
+2. **字幕**：`*.srt` / `*.ass`（与原片对应）
+3. **解说文案**：`*.txt` / `*.md` / `*.docx`，用「原片：」「解说：」标签分段：
+
+```text
+原片：
+这里写需要保留播放的原片台词（会在字幕里定位到时间区间）
+
+解说：
+这里写口播解说文案（会生成克隆配音，不含标签文字）
+```
+
+## 目录结构
+
+```text
+project/
+  dy.py                    # ★ 统一 CLI 入口
+  anchored_pipeline.py     # 成片主流程（配音→分镜→渲染）
+  gpt_sovits_batch.py      # 本地 GPT-SoVITS 引擎批处理（可选配音后端）
+  backend/
+    runner.py              # CLI 编排器（命令构建 + 子进程 + 后处理）
+    config_store.py        # 配置与加密 API Key
+    media.py               # 素材检测
+    drama_source_index.py  # 视觉识别 / 视觉索引
+    manual_script.py       # 脚本表生成（文案↔字幕对齐）
+    visual_matcher.py      # 分镜画面匹配（全局禁复用）
+    ad_filter.py           # 广告禁区过滤
+    qwen_voice.py          # 百炼克隆音色 / TTS
+    vision_api.py          # 抽帧 + 视觉模型调用
+    postprocess.py         # 分辨率 / 片头片尾留白 / 字幕重定时
+    schemas.py             # 配置模型
+    media_tools.py         # ffmpeg/ffprobe 定位
+    concurrency.py         # 并发自适应
+  config/                  # user_config.json + 加密 secrets（不入库）
+  tools/ffmpeg/bin/        # 内置 ffmpeg / ffprobe
+  tests/                   # 单元测试
+```
+
+## 配置与密钥
+
+- 视觉识别与百炼配音**共用**同一个百炼 DashScope API Key。
+- Key 以加密形式保存在 `config/secrets.bin`（配 `config/.secret.key`），不写入明文、不入库。
+- 也可用环境变量 `DASHSCOPE_API_KEY` / `SILICONFLOW_API_KEY`。
+
+## 测试
+
+```bash
+python -m unittest discover -s tests
+```
+
+## 安全说明
+
+- 不要提交 API Key、本机配置、运行缓存、视频/音频/字幕素材。
+- 相关文件已在 `.gitignore` 中忽略，发布公开仓库前请复查。

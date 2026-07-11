@@ -17,10 +17,6 @@ class ApiSettings(BaseModel):
     visual_model: str = "qwen3.7-plus"
 
 
-class UiSettings(BaseModel):
-    language: Literal["zh", "en"] = "zh"
-
-
 class VoiceSettings(BaseModel):
     mode: Literal["system", "clone"] = "clone"
     provider: Literal["qwen", "cosyvoice", "gpt_sovits"] = "qwen"
@@ -49,7 +45,6 @@ class VideoSettings(BaseModel):
     trim_tail: int = Field(15, ge=1, le=300)
     padding_head: float = Field(1.0, ge=0, le=5)
     padding_tail: float = Field(3.0, ge=0, le=5)
-    target_minutes: int = Field(10, ge=5, le=60)
     resolution: Literal["720P", "1080P", "2K", "4K"] = "1080P"
     video_crf: int = Field(20, ge=14, le=32)
     preset: Literal["fast", "medium", "slow"] = "fast"
@@ -64,7 +59,6 @@ class DramaSettings(BaseModel):
 
 class AppSettings(BaseModel):
     material_folder: str = ""
-    ui: UiSettings = UiSettings()
     api: ApiSettings = ApiSettings()
     video: VideoSettings = VideoSettings()
     voice: VoiceSettings = VoiceSettings()
@@ -90,25 +84,3 @@ class MaterialInfo(BaseModel):
     video_codec: str
     audio_codec: str | None = None
     warnings: list[str] = []
-
-
-class JobCreate(BaseModel):
-    settings: AppSettings
-
-
-class JobInfo(BaseModel):
-    id: str
-    status: Literal["queued", "running", "success", "failed", "cancelled"]
-    stage: str = ""
-    progress: int = 0
-    message: str = ""
-    output_path: str = ""
-    error: str = ""
-    title: str = ""
-    tags: list[str] = []
-    description: str = ""
-    narration_text: str = ""
-    created_at: float = 0.0
-    started_at: float = 0.0
-    finished_at: float = 0.0
-    elapsed_seconds: float = 0.0
