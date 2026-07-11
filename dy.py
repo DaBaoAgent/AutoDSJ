@@ -66,39 +66,59 @@ def _dashscope_key(settings: AppSettings) -> str:
     )
 
 
-def _visual_ready(folder: Path) -> bool:
+def _visual_stats(folder: Path) -> dict:
     path = folder / VISUAL_INDEX_FILE
     if not path.exists():
-        return False
+        return {"exists": False, "ready": False, "frame_count": 0, "success": 0, "failed": 0, "interval": 0.0}
     try:
         payload = json.loads(path.read_text("utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
+        return {"exists": True, "ready": False, "frame_count": 0, "success": 0, "failed": 0, "interval": 0.0, "corrupt": True}
     frame_count = int(payload.get("frame_count") or len(payload.get("frames") or []) or 0)
     success = int(payload.get("success_count") or 0)
+    failed = int(payload.get("failed_count") or 0)
     status = str(payload.get("status") or "")
-    return frame_count > 0 and success > 0 and status not in {"extracting_frames", "recognizing_frames"}
+    ready = frame_count > 0 and success > 0 and status not in {"extracting_frames", "recognizing_frames"}
+    return {
+        "exists": True, "ready": ready, "frame_count": frame_count,
+        "success": success, "failed": failed, "status": status,
+        "interval": float(payload.get("frame_interval") or 0.0),
+    }
 
 
-def _run_visual(settings: AppSettings, *, force: bool) -> None:
+def _visual_ready(folder: Path) -> bool:
+    return _visual_stats(folder)["ready"]
+
+
+def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, workers: int = 3) -> dict:
     key = _dashscope_key(settings)
     if not key:
         raise SystemExit("缺少百炼 DASHSCOPE_API_KEY。请用 `dy set-key --dashscope <KEY>` 配置。")
-    print(f"→ 视觉识别（模型 {settings.api.visual_model}）…")
+    folder = Path(settings.material_folder)
+    # 续跑（非强制、未指定间隔）时复用已有索引的抽帧间隔，保证帧 ID 对齐、命中缓存
+    if not force and interval <= 0:
+        existing = _visual_stats(folder)
+        if existing.get("exists") and existing.get("interval"):
+            interval = float(existing["interval"])
+    mode = "重跑" if force else "识别/续跑"
+    print(f"→ 视觉{mode}（模型 {settings.api.visual_model}，并发 {workers}，抽帧 {interval or '自适应'}）…")
     result = build_source_index(
         settings,
         siliconflow_api_key=key,
         visual_model=settings.api.visual_model,
-        frame_interval=6.0,
+        frame_interval=interval,
         visual_batch_size=8,
         visual_delay_sec=1.0,
-        visual_workers=1,
+        visual_workers=workers,
         force_visual=force,
         enable_visual_model=True,
     )
-    fc = int(result.get("frame_count") or 0)
-    sc = int(result.get("success_count") or 0)
-    print(f"  视觉识别完成：成功 {sc}/{fc} 帧")
+    fc = int(result.get("visual_frame_count") or 0)
+    sc = int(result.get("visual_success_count") or 0)
+    failed = int(result.get("visual_failed_count") or 0)
+    tail = f"，仍有 {failed} 帧失败（可 `dy visual` 续跑或 `run --resume`）" if failed else ""
+    print(f"  视觉识别完成：成功 {sc}/{fc} 帧{tail}")
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -119,7 +139,7 @@ def cmd_detect(args: argparse.Namespace) -> None:
 def cmd_visual(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
-    _run_visual(settings, force=args.force)
+    _run_visual(settings, force=args.force, interval=args.interval, workers=args.workers)
 
 
 def cmd_script(args: argparse.Namespace) -> None:
@@ -148,14 +168,20 @@ def cmd_run(args: argparse.Namespace) -> None:
         raise SystemExit("缺少“原片/解说”文案文件（txt/md/docx）。")
 
     print("[2/4] 视觉识别")
+    stats = _visual_stats(folder)
     if args.skip_visual:
-        if not _visual_ready(folder):
+        if not stats["ready"]:
             raise SystemExit("--skip-visual 需要已有可用视觉索引，但未检测到。请先运行 `dy visual`。")
-        print("  复用已有视觉索引（--skip-visual）")
-    elif _visual_ready(folder) and not args.force_visual:
-        print("  复用已有视觉索引（如需重跑用 --force-visual）")
+        print(f"  复用已有视觉索引（--skip-visual），成功 {stats['success']}/{stats['frame_count']} 帧")
+    elif args.force_visual:
+        _run_visual(settings, force=True, interval=args.interval, workers=args.workers)
+    elif stats["ready"] and not args.resume and stats["failed"] == 0:
+        print(f"  复用已有视觉索引，成功 {stats['success']}/{stats['frame_count']} 帧（--force-visual 重跑）")
+    elif stats["ready"] and stats["failed"] > 0 and not args.resume:
+        print(f"  已有索引但 {stats['failed']} 帧失败，自动续跑抢救…")
+        _run_visual(settings, force=False, interval=args.interval, workers=args.workers)
     else:
-        _run_visual(settings, force=args.force_visual)
+        _run_visual(settings, force=False, interval=args.interval, workers=args.workers)
 
     print("[3/4] 生成脚本表")
     table = generate_manual_script_table(settings)
@@ -163,7 +189,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     print(f"  原片 {validation.get('source_clips', 0)} 段 · 解说 {validation.get('narration_blocks', 0)} 段")
 
     print("[4/4] 配音 + 剪辑 + 后处理")
-    output = runner.render(settings, on_line=lambda line: print(f"  {line}"))
+    output = runner.render(settings, on_line=lambda line: print(f"  {line}"), concurrency=args.concurrency)
     print(f"\n✔ 成片完成：{output}")
 
 
@@ -185,7 +211,12 @@ def cmd_status(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"  素材 ✗ {exc}")
     print(f"  文案 {'✓' if find_manual_script_file(folder) else '✗ 未找到'}")
-    print(f"  视觉索引 {'✓ 就绪' if _visual_ready(folder) else '✗ 未就绪'}")
+    vs = _visual_stats(folder)
+    if vs["ready"]:
+        tail = f"（{vs['failed']} 帧失败，可续跑）" if vs["failed"] else ""
+        print(f"  视觉索引 ✓ 就绪 {vs['success']}/{vs['frame_count']} 帧{tail}")
+    else:
+        print("  视觉索引 ✗ 未就绪")
     print(f"  脚本表 {'✓' if (folder / SCRIPT_TABLE_FILE).exists() else '✗ 未生成'}")
     print(f"  成片 {'✓ ' + str(folder / '★ 成片.mp4') if (folder / '★ 成片.mp4').exists() else '✗ 未生成'}")
 
@@ -251,6 +282,66 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_preflight(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    folder = Path(settings.material_folder)
+    ok = True
+    print("═══ DY 工作流 preflight ═══")
+    print(f"素材文件夹：{folder}")
+    # 1 素材（原片 + 字幕）
+    try:
+        media = detect_materials(settings.material_folder, settings.drama.source_count)
+        print(f"✓ 原片 {Path(media.video_path).name} ({media.duration:.1f}s) · 字幕 {len(media.subtitle_paths)} 个")
+        for warning in media.warnings:
+            print(f"  ⚠ {warning}")
+    except Exception as exc:
+        ok = False
+        print(f"✗ 素材：{exc}")
+    # 2 文案
+    script = find_manual_script_file(folder)
+    if script:
+        print(f"✓ 文案 {script.name}")
+    else:
+        ok = False
+        print("✗ 文案：缺少“原片：/解说：”文案文件（txt/md/docx）")
+    # 3 API Key
+    if _dashscope_key(settings):
+        print("✓ 百炼 DASHSCOPE_API_KEY 已配置")
+    else:
+        ok = False
+        print("✗ 百炼 DASHSCOPE_API_KEY 未配置（dy set-key --dashscope <KEY>）")
+    # 4 FFmpeg
+    try:
+        from backend.media_tools import ffmpeg, ffprobe
+        ffmpeg(); ffprobe()
+        print("✓ FFmpeg 就绪")
+    except Exception as exc:
+        ok = False
+        print(f"✗ FFmpeg：{exc}")
+    # 5 视觉索引 / 脚本表（run 会自动生成，仅提示）
+    vs = _visual_stats(folder)
+    if vs["ready"]:
+        tail = f"（{vs['failed']} 帧失败，可续跑）" if vs["failed"] else ""
+        print(f"· 视觉索引 已就绪 {vs['success']}/{vs['frame_count']} 帧{tail}")
+    else:
+        print("· 视觉索引 未就绪（run 会自动生成）")
+    print("· 脚本表 " + ("已生成" if (folder / SCRIPT_TABLE_FILE).exists() else "未生成（run 会自动生成）"))
+    print("preflight " + ("通过，可直接 `dy run`。" if ok else "不通过，请先处理上方 ✗。"))
+    if not ok:
+        sys.exit(1)
+
+
+def cmd_concurrency(args: argparse.Namespace) -> None:
+    from backend.concurrency import detect_optimal_concurrency, get_concurrency, set_concurrency
+    if args.set:
+        print(f"并发已固定为 {set_concurrency(args.set)}（写入 concurrency_profile.json）")
+    elif args.benchmark:
+        print("运行并发基准测试（会生成临时测试视频，稍候）…")
+        print(f"基准最优并发 = {detect_optimal_concurrency()}，已缓存")
+    else:
+        print(f"当前渲染并发 = {get_concurrency()}")
+
+
 # --------------------------------------------------------------------------- #
 # argparse
 # --------------------------------------------------------------------------- #
@@ -263,17 +354,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="一键全流程：检测→视觉→脚本表→成片")
     p_run.add_argument("--folder", help="素材文件夹（覆盖已保存路径）")
-    p_run.add_argument("--force-visual", action="store_true", help="强制重跑视觉识别")
+    p_run.add_argument("--force-visual", action="store_true", help="强制重跑视觉识别（清空重来）")
+    p_run.add_argument("--resume", action="store_true", help="续跑视觉识别：复用已识别帧，只重试失败帧")
     p_run.add_argument("--skip-visual", action="store_true", help="跳过视觉识别（需已有索引）")
+    p_run.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应）")
+    p_run.add_argument("--workers", type=int, default=3, help="视觉识别并发批数（默认3）")
+    p_run.add_argument("--concurrency", type=int, default=None, help="渲染并发（覆盖，跳过基准）")
     p_run.set_defaults(func=cmd_run)
 
     p_detect = sub.add_parser("detect", help="检测素材（原片/字幕/文案）")
     p_detect.add_argument("--folder")
     p_detect.set_defaults(func=cmd_detect)
 
-    p_visual = sub.add_parser("visual", help="运行视觉识别，建立视觉索引")
+    p_pre = sub.add_parser("preflight", help="一次性红绿灯：素材/文案/Key/FFmpeg 是否就绪")
+    p_pre.add_argument("--folder")
+    p_pre.set_defaults(func=cmd_preflight)
+
+    p_visual = sub.add_parser("visual", help="运行视觉识别，建立视觉索引（默认续跑）")
     p_visual.add_argument("--folder")
-    p_visual.add_argument("--force", action="store_true", help="强制重跑")
+    p_visual.add_argument("--force", action="store_true", help="强制重跑（清空重来）")
+    p_visual.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应/复用）")
+    p_visual.add_argument("--workers", type=int, default=3, help="并发批数（默认3）")
     p_visual.set_defaults(func=cmd_visual)
 
     p_script = sub.add_parser("script", help="生成脚本表（对齐字幕/文案）")
@@ -300,6 +401,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", help="环境自检（ffmpeg / 依赖 / API Key）")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_conc = sub.add_parser("concurrency", help="查看/固定渲染并发（跳过基准）")
+    p_conc.add_argument("--set", type=int, help="手动固定并发数")
+    p_conc.add_argument("--benchmark", action="store_true", help="运行基准测试并缓存最优并发")
+    p_conc.set_defaults(func=cmd_concurrency)
 
     return parser
 

@@ -34,16 +34,24 @@ Windows 可直接双击 `DY.bat`（会用项目 `.venv` 跑 `dy.py run`）。
 | 命令 | 作用 |
 |------|------|
 | `dy.py run` | 一键全流程：检测 → 视觉 → 脚本表 → 成片 |
+| `dy.py preflight` | 一次性红绿灯：素材/文案/Key/FFmpeg 是否就绪 |
 | `dy.py detect` | 检测素材（原片/字幕/文案是否齐全） |
-| `dy.py visual` | 运行视觉识别，建立视觉索引（`--force` 重跑） |
+| `dy.py visual` | 视觉识别（默认续跑；`--force` 清空重跑） |
 | `dy.py script` | 生成脚本表（对齐字幕与文案） |
 | `dy.py status` | 查看当前工作流进度 |
+| `dy.py concurrency` | 查看/固定渲染并发（`--set N` / `--benchmark`） |
 | `dy.py config` | 打印当前配置（API Key 掩码） |
 | `dy.py set --folder <路径>` | 设置素材文件夹（也可设分辨率/视觉模型） |
 | `dy.py set-key --dashscope <KEY>` | 加密保存 API Key |
 | `dy.py doctor` | 环境自检 |
 
-`run` 默认复用已有视觉索引；`--force-visual` 强制重跑，`--skip-visual` 跳过（需已有索引）。
+`run` 视觉识别策略：默认复用已就绪索引；若有失败帧则自动续跑抢救；
+`--resume` 强制续跑（复用已识别帧、只重试失败帧），`--force-visual` 清空重跑，
+`--skip-visual` 跳过（需已有索引）。抽帧间隔默认按视频时长自适应（`--interval` 覆盖），
+视觉并发默认 3（`--workers` 覆盖），渲染并发用 `--concurrency` 覆盖。
+
+**稳健性**：视觉识别支持断点续跑（按帧缓存，只重试失败帧）与失败帧单独小批重跑；
+百炼视觉/配音调用统一走指数退避重试，坏索引/损坏 JSON 自动重建。
 
 ## 素材准备
 

@@ -27,6 +27,7 @@ import wave
 from backend.concurrency import get_concurrency
 from backend.ad_filter import detect_ad_intervals
 from backend.media_tools import ffmpeg, ffprobe, gpt_sovits_python
+from backend.net_retry import retry_call
 from backend.qwen_voice import (
     DEFAULT_QWEN_CLONE_MODEL,
     DEFAULT_QWEN_REFERENCE_AUDIO,
@@ -306,7 +307,13 @@ def synthesize_cosyvoice(segments: list[NarrationSegment], folder: Path,
             syn = SpeechSynthesizer(model=model, voice=voice,
                                     format=AudioFormat.MP3_24000HZ_MONO_256KBPS,
                                     speech_rate=rate)
-            target.write_bytes(syn.call(tts_text))
+            audio = retry_call(
+                lambda: syn.call(tts_text),
+                attempts=4, base_delay=2.0,
+                on_retry=lambda a, e, d: print(
+                    f"  [重试] CosyVoice 第{i}段 第{a}次失败：{e}；{d:.0f}s 后重试", flush=True),
+            )
+            target.write_bytes(audio)
         segment.audio_file = str(target)
         segment.audio_duration = probe_duration(target)
         print(f"  TTS {i}/{len(segments)} {segment.audio_duration:.2f}s")
@@ -452,7 +459,12 @@ def synthesize_qwen_clone(segments: list[NarrationSegment], folder: Path, api_ke
             digest = hashlib.sha1(tts_text.encode("utf-8")).hexdigest()[:10]
             target = seg_dir / f"tts_{index:04d}_{digest}.wav"
             if not target.exists() or target.stat().st_size < 1000:
-                synthesize_bailian_http_to_file(api_key, model, voice, tts_text, target)
+                retry_call(
+                    lambda: synthesize_bailian_http_to_file(api_key, model, voice, tts_text, target),
+                    attempts=4, base_delay=2.0,
+                    on_retry=lambda a, e, d: print(
+                        f"  [重试] 配音第{index}段 第{a}次失败：{e}；{d:.0f}s 后重试", flush=True),
+                )
             segment.audio_file = str(target)
             segment.audio_duration = probe_duration(target)
             with progress_lock:

@@ -123,3 +123,14 @@ def get_concurrency() -> int:
             pass
     cpu_count = os.cpu_count() or 4
     return min(4, cpu_count - 1) if cpu_count > 1 else 1
+
+
+def set_concurrency(workers: int) -> int:
+    """手动固定并发数，写入 profile，后续 get_concurrency 直接复用（跳过基准）。"""
+    workers = max(1, min(16, int(workers)))
+    PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROFILE_PATH.write_text(
+        json.dumps({"optimal_workers": workers, "source": "manual"}, ensure_ascii=False, indent=2),
+        "utf-8",
+    )
+    return workers

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .media import detect_materials
+from .net_retry import retry_call
 from .vision_api import (
     FrameSample,
     _call_siliconflow_vision,
@@ -205,40 +206,39 @@ def _annotate_source_frames(
         for start in range(0, len(pending), batch_size)
     ]
 
-    def process_batch(batch_no: int, batch: list[dict]) -> tuple[int, list[dict], list[dict], str]:
-        last_error = ""
-        for attempt in range(1, 4):
+    def _failed_records(batch: list[dict], error: str) -> list[dict]:
+        return [{
+            "frame_id": source["frame_id"],
+            "video_role": "source",
+            "source_index": source["source_index"],
+            "source_file": source["source_file"],
+            "time": source["time"],
+            "time_text": source["time_text"],
+            "interval": frame_interval,
+            "caption": "",
+            "error": error,
+        } for source in batch]
+
+    def process_batch(batch_no: int, batch: list[dict], *, attempts: int = 3) -> tuple[int, list[dict], list[dict], str]:
+        detail = {"msg": ""}
+
+        def _call() -> list[dict]:
             try:
-                parsed = _call_siliconflow_vision(
-                    api_key,
-                    model,
-                    result["api_url"],
-                    batch,
-                )
-                return batch_no, parsed, [], ""
+                return _call_siliconflow_vision(api_key, model, result["api_url"], batch)
             except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace")[-800:]
-                last_error = f"HTTP {exc.code}: {detail}"
-                if attempt < 3:
-                    time.sleep(max(delay_sec, 2.0) * attempt)
+                body = exc.read().decode("utf-8", errors="replace")[-800:]
+                detail["msg"] = f"HTTP {exc.code}: {body}"
+                raise
             except Exception as exc:
-                last_error = str(exc)
-                if attempt < 3:
-                    time.sleep(max(delay_sec, 2.0) * attempt)
-        failed = []
-        for source in batch:
-            failed.append({
-                "frame_id": source["frame_id"],
-                "video_role": "source",
-                "source_index": source["source_index"],
-                "source_file": source["source_file"],
-                "time": source["time"],
-                "time_text": source["time_text"],
-                "interval": frame_interval,
-                "caption": "",
-                "error": last_error,
-            })
-        return batch_no, [], failed, last_error
+                detail["msg"] = str(exc)
+                raise
+
+        try:
+            parsed = retry_call(_call, attempts=attempts, base_delay=max(delay_sec, 2.0), max_delay=45.0)
+            return batch_no, parsed, [], ""
+        except Exception as exc:  # noqa: BLE001
+            last_error = detail["msg"] or str(exc)
+            return batch_no, [], _failed_records(batch, last_error), last_error
 
     def merge_batch(batch_no: int, parsed_batch: list[dict], failed_batch: list[dict], error: str) -> None:
         if parsed_batch:
@@ -275,6 +275,31 @@ def _annotate_source_frames(
             futures = [executor.submit(process_batch, batch_no, batch) for batch_no, batch in batches]
             for future in as_completed(futures):
                 merge_batch(*future.result())
+
+    # 失败帧单独重跑：首轮无 caption 的帧，用更小批(2)+更多重试再抢救一次
+    retry_ids = [str(item.get("frame_id")) for item in result["frames"] if not item.get("caption")]
+    retry_records = [record_map[fid] for fid in retry_ids if fid in record_map]
+    if retry_records:
+        print(f"  失败帧单独重跑：{len(retry_records)} 帧", flush=True)
+        recovered: dict[str, dict] = {}
+        small_batches = [
+            (idx // 2 + 1, retry_records[idx:idx + 2])
+            for idx in range(0, len(retry_records), 2)
+        ]
+        for batch_no, batch in small_batches:
+            _, parsed, _, _ = process_batch(batch_no, batch, attempts=4)
+            for item in parsed:
+                if item.get("caption"):
+                    recovered[str(item.get("frame_id"))] = item
+        if recovered:
+            for frame in result["frames"]:
+                hit = recovered.get(str(frame.get("frame_id")))
+                if hit and not frame.get("caption"):
+                    frame.update(hit)
+                    frame["interval"] = frame_interval
+            result["success_count"] = sum(1 for item in result["frames"] if item.get("caption"))
+            result["failed_count"] = len(result["frames"]) - result["success_count"]
+            print(f"  重跑抢救成功 {len(recovered)} 帧", flush=True)
 
     result["status"] = "complete"
     result["progress"] = 100
@@ -447,6 +472,22 @@ def _build_candidates(subtitles: list[dict], visual_index: dict, settings: AppSe
     return candidates
 
 
+def adaptive_frame_interval(
+    duration: float,
+    *,
+    target_frames: int = 320,
+    lo: float = 4.0,
+    hi: float = 12.0,
+) -> float:
+    """按视频时长自适应抽帧间隔，把总帧数控制在 ~target_frames，封顶 [lo, hi] 秒。
+
+    短集抽得更密（间隔小、更准），长集抽得更疏（间隔大、更快、控 API 量）。
+    """
+    if duration <= 0:
+        return 6.0
+    return round(max(lo, min(hi, duration / max(1, target_frames))), 3)
+
+
 def build_source_index(
     settings: AppSettings,
     *,
@@ -468,7 +509,10 @@ def build_source_index(
     if not subtitle_paths:
         raise RuntimeError("没有可识别的原片 SRT/ASS 字幕")
 
-    frame_interval = max(2.0, float(frame_interval or 6.0))
+    if frame_interval and float(frame_interval) > 0:
+        frame_interval = max(2.0, float(frame_interval))
+    else:
+        frame_interval = adaptive_frame_interval(float(media.duration))
     model = visual_model or settings.api.visual_model or "qwen3.7-plus"
 
     subtitle_sources = []
