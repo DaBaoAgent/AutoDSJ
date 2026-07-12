@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 import wave
 
@@ -28,6 +28,7 @@ from backend.concurrency import get_concurrency
 from backend.ad_filter import detect_ad_intervals
 from backend.media_tools import ffmpeg, ffprobe, gpt_sovits_python
 from backend.net_retry import retry_call
+from backend.vision_api import parse_srt
 from backend.qwen_voice import (
     DEFAULT_QWEN_CLONE_MODEL,
     DEFAULT_QWEN_REFERENCE_AUDIO,
@@ -37,7 +38,9 @@ from backend.qwen_voice import (
     read_reference_text,
     synthesize_bailian_http_to_file,
 )
-from backend.visual_matcher import VisualIntervalAllocator, load_visual_frames, split_visual_clauses
+from backend.visual_matcher import (
+    VisualIntervalAllocator, load_visual_frames, split_visual_clauses, dominant_character_group,
+)
 
 ROOT = Path(__file__).resolve().parent
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -281,6 +284,9 @@ class NarrationSegment:
     visual_match_score: float = 0.0
     visual_match_evidence: str = ""
     tts_parent_id: int = 0
+    # For source clips: sub-intervals (absolute source seconds) to keep after
+    # cutting >1s speech pauses. Empty = play [clip_start, clip_start+audio_duration] whole.
+    keep_ranges: list = field(default_factory=list)
 
 
 def write_plain_script(data: dict, output: Path) -> None:
@@ -644,6 +650,41 @@ def _clause_audio_ranges(clauses: list[str], duration: float,
     return [(edges[index], edges[index + 1]) for index in range(len(clauses))]
 
 
+MIN_SHOT_SECONDS = 0.5  # every visual shot must stay on screen longer than this
+
+
+def _merge_short_shots(clauses: list[str], ranges: list[tuple[float, float]],
+                       min_shot: float = MIN_SHOT_SECONDS) -> tuple[list[str], list[tuple[float, float]]]:
+    """Merge visual clauses so every shot's audio span exceeds ``min_shot`` seconds.
+
+    A shot shorter than the floor flashes on screen. Accumulate consecutive
+    clauses until the running span clears the floor, then flush; any trailing
+    remainder folds back into the previous shot so nothing under the floor ships.
+    """
+    if not ranges:
+        return list(clauses), list(ranges)
+    out_clauses: list[str] = []
+    out_ranges: list[tuple[float, float]] = []
+    buffer_text = ""
+    buffer_start: float | None = None
+    for clause, (start, end) in zip(clauses, ranges):
+        if buffer_start is None:
+            buffer_start = start
+        buffer_text += clause
+        if end - buffer_start >= min_shot:
+            out_clauses.append(buffer_text)
+            out_ranges.append((buffer_start, end))
+            buffer_text, buffer_start = "", None
+    if buffer_start is not None:
+        if out_ranges:
+            out_ranges[-1] = (out_ranges[-1][0], ranges[-1][1])
+            out_clauses[-1] += buffer_text
+        else:
+            out_clauses.append(buffer_text)
+            out_ranges.append((buffer_start, ranges[-1][1]))
+    return out_clauses, out_ranges
+
+
 def expand_narration_visual_shots(parents: list[NarrationSegment]) -> list[NarrationSegment]:
     """Split full-block TTS into visual clauses without synthesising the voice again."""
     children: list[NarrationSegment] = []
@@ -651,6 +692,7 @@ def expand_narration_visual_shots(parents: list[NarrationSegment]) -> list[Narra
         clauses = split_visual_clauses(parent.text) or [parent.text]
         pauses = _silence_boundaries(Path(parent.audio_file), parent.audio_duration)
         ranges = _clause_audio_ranges(clauses, parent.audio_duration, pauses)
+        clauses, ranges = _merge_short_shots(clauses, ranges)
         for shot_index, (clause, (start, end)) in enumerate(zip(clauses, ranges), 1):
             children.append(NarrationSegment(
                 segment_id=len(children) + 1,
@@ -679,22 +721,151 @@ def expand_narration_visual_shots(parents: list[NarrationSegment]) -> list[Narra
     return children
 
 
+def _load_scene_map(folder: Path) -> tuple[list[dict], list[dict]]:
+    """Load an optional per-episode 大镜头/场景段 map (`_scene_map.json`).
+
+    Each scene defines source-time ranges plus keywords/characters. Narration
+    classified to a scene draws its footage only from that scene's ranges — this
+    keeps "开会" narration on the meeting footage, "活动现场" on the event, etc.
+    Returns (scenes, overrides); overrides pin an exact narration snippet to a
+    named scene (highest priority) for lines that carry no scene keyword.
+    """
+    path = folder / "_scene_map.json"
+    if not path.exists():
+        return [], []
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    raw = data.get("scenes", []) if isinstance(data, dict) else data
+    scenes: list[dict] = []
+    for sc in raw:
+        ranges = [(float(a), float(b)) for a, b in sc.get("ranges", []) if b > a]
+        if not ranges and sc.get("start") is not None and sc.get("end") is not None:
+            ranges = [(float(sc["start"]), float(sc["end"]))]
+        if ranges:
+            scenes.append({
+                "name": sc.get("name", ""),
+                "ranges": ranges,
+                "keywords": [k for k in sc.get("keywords", []) if k],
+                "characters": [c for c in sc.get("characters", []) if c],
+            })
+    overrides = [
+        {"contains": o.get("contains", ""), "scene": o.get("scene", "")}
+        for o in (data.get("overrides", []) if isinstance(data, dict) else [])
+        if o.get("contains") and o.get("scene")
+    ]
+    return scenes, overrides
+
+
+def _classify_scene(text: str, scenes: list[dict], overrides: list[dict] | None = None) -> dict | None:
+    """Assign narration text to a scene. Overrides (exact snippet → scene) win
+    first — use them for emotion/relationship lines that carry no scene keyword.
+    Otherwise keywords are the strong discriminator (x2), characters a weak
+    tiebreak (x1); requires >=1 keyword hit so only scene-explicit narration is
+    locked, everything else falls through to the global semantic match."""
+    if overrides:
+        by_name = {sc["name"]: sc for sc in scenes}
+        for ov in overrides:
+            if ov["contains"] in text and ov["scene"] in by_name:
+                return by_name[ov["scene"]]
+    best: dict | None = None
+    best_score = 0
+    for sc in scenes:
+        kw = sum(1 for k in sc["keywords"] if k in text)
+        if kw < 1:
+            continue
+        ch = sum(1 for c in sc["characters"] if c in text)
+        score = kw * 2 + ch
+        if score > best_score:
+            best_score = score
+            best = sc
+    return best
+
+
 def allocate_visual_all(segments: list[NarrationSegment], source_clips: list[NarrationSegment],
                         video_duration: float, folder: Path,
                         usable_start: float = 0.0) -> VisualIntervalAllocator:
+    """Allocate visual intervals for narration shots.
+
+    Uses LLM text-embedding semantic matching when a DashScope key is available
+    (frame vectors cached in the folder); falls back to n-gram matching otherwise.
+    An optional `_scene_map.json` hard-locks scene-explicit narration to the
+    matching 原片 场景段 (会议/病房/活动现场 …).
+    """
     ad_intervals = detect_ad_intervals(folder)
-    allocator = VisualIntervalAllocator(
-        video_duration, load_visual_frames(folder), usable_start=usable_start,
-        blocked_intervals=ad_intervals,
+    frames = load_visual_frames(folder)
+
+    # --- embedding setup (optional, cached) --------------------------------------
+    frame_vecs: dict[float, list[float]] = {}
+    query_vecs: dict[int, list[float]] = {}
+    narration_segments = [s for s in segments if s.row_type == "narration"]
+    try:
+        from backend.embed_match import dashscope_key, frame_embeddings, embed_texts
+        api_key = dashscope_key()
+        if api_key and narration_segments:
+            frame_texts = [f.evidence for f in frames]
+            print(f"语义匹配：嵌入 {len(frame_texts)} 帧（缓存复用）…", flush=True)
+            vecs = frame_embeddings(folder, frame_texts, api_key)
+            frame_vecs = {frames[i].time: vecs[i] for i in range(min(len(frames), len(vecs)))}
+            queries = [(s.visual_intent or s.text) for s in narration_segments]
+            print(f"语义匹配：嵌入 {len(queries)} 个解说分镜…", flush=True)
+            qv = embed_texts(queries, api_key)
+            for seg, vec in zip(narration_segments, qv):
+                query_vecs[id(seg)] = vec
+    except Exception as exc:
+        print(f"语义嵌入不可用，回退 n-gram 匹配：{exc}", flush=True)
+        frame_vecs = {}
+        query_vecs = {}
+
+    protagonist = dominant_character_group(
+        [(s.visual_intent or s.text) for s in narration_segments]
     )
+    allocator = VisualIntervalAllocator(
+        video_duration, frames, usable_start=usable_start,
+        blocked_intervals=ad_intervals, frame_vecs=frame_vecs,
+        protagonist_group=protagonist,
+    )
+    if protagonist is not None:
+        print(f"隐含主角回退：无点名解说默认偏向角色组 #{protagonist}", flush=True)
     if ad_intervals:
         print(f"已启用插片广告禁区 {len(ad_intervals)} 段，原片与解说画面均禁止使用", flush=True)
     for clip in source_clips:
-        allocator.reserve(clip.clip_start, clip.clip_end, f"原片行{clip.script_row_id}")
+        allocator.reserve_source_clip(clip.clip_start, clip.clip_end, f"原片行{clip.script_row_id}")
+
+    scenes, overrides = _load_scene_map(folder)
+    # Reconstruct each narration sentence's full text from its shots so every
+    # shot of a sentence shares the sentence's scene classification (a clause
+    # like "接连反对庄国栋" alone might miss the "会议上" keyword in a sibling clause).
+    parent_text: dict = {}
+    if scenes:
+        for seg in segments:
+            if seg.row_type == "narration":
+                pid = getattr(seg, "tts_parent_id", None) or seg.script_row_id
+                parent_text[pid] = parent_text.get(pid, "") + (seg.text or "")
+        print(f"已加载场景段地图：{len(scenes)} 个场景（{len(overrides)} 条文本指定），解说按场景锁定匹配", flush=True)
 
     group_cursor: dict[int, float] = {}
+    locked_log: list[str] = []
     for segment in sorted(segments, key=lambda item: (item.script_row_id, item.shot_index)):
         chronological_start = group_cursor.get(segment.script_row_id, segment.source_start)
+        scene_ranges = None
+        if scenes and segment.row_type == "narration":
+            pid = getattr(segment, "tts_parent_id", None) or segment.script_row_id
+            own = segment.visual_intent or segment.text or ""
+            # 先按「本分镜自己的文字」分类（override 命中 or 关键词命中）——一句解说常
+            # 跨多个场景（哥哥的食堂线 + 玫瑰的会议线写在同一句），整句级分类会把所有
+            # 镜头钉到同一场景造成张冠李戴；按镜头各自内容锁定才能各归各位。
+            sc = _classify_scene(own, scenes, overrides)
+            if not sc:
+                # 本镜头自己无场景信号（纯情绪/关系/旁白）→ 回退整句分类（保留原有 override 行为）
+                ctext = parent_text.get(pid, "") or own
+                sc = _classify_scene(ctext, scenes, overrides)
+            if sc:
+                scene_ranges = sc["ranges"]
+                locked_log.append(
+                    f"  [场景锁定] 行{segment.script_row_id}-镜{segment.shot_index} → 「{sc['name']}」"
+                )
         start, end, score, evidence = allocator.allocate(
             segment.visual_intent or segment.text,
             segment.audio_duration,
@@ -702,6 +873,8 @@ def allocate_visual_all(segments: list[NarrationSegment], source_clips: list[Nar
             segment.source_end,
             f"解说行{segment.script_row_id}-镜头{segment.shot_index}",
             chronological_start=chronological_start,
+            query_vec=query_vecs.get(id(segment)),
+            scene_ranges=scene_ranges,
         )
         segment.clip_start = start
         segment.clip_end = end
@@ -709,6 +882,10 @@ def allocate_visual_all(segments: list[NarrationSegment], source_clips: list[Nar
         segment.visual_match_evidence = evidence
         segment.match_confidence = "A" if score >= 0.42 else ("B" if score >= 0.26 else "C")
         group_cursor[segment.script_row_id] = end + allocator.guard
+    if locked_log:
+        print(f"场景锁定命中 {len(locked_log)} 个解说镜头：", flush=True)
+        for line in locked_log:
+            print(line, flush=True)
     return allocator
 
 
@@ -881,6 +1058,74 @@ def build_timeline(source_clips: list[NarrationSegment],
     return timeline
 
 
+def _speech_keep_ranges(subtitles: list[tuple[float, float]], clip_start: float, clip_end: float,
+                        max_pause: float = 1.0, pad: float = 0.15) -> list[tuple[float, float]]:
+    """Keep speech, cut >max_pause pauses — driven by subtitle timings, not audio level.
+
+    Drama clips carry background music/ambience, so acoustic silencedetect misses
+    the real "nobody is speaking" gaps. Subtitle spans mark exactly when someone
+    talks; a gap between consecutive subtitles longer than ``max_pause`` is the
+    pause to remove. Returns absolute-source-time keep intervals (a single full
+    span when nothing worth cutting), each padded by ``pad`` so speech isn't clipped.
+    """
+    span = clip_end - clip_start
+    full = [(round(clip_start, 3), round(clip_end, 3))]
+    spans = sorted(
+        (max(clip_start, float(s)), min(clip_end, float(e)))
+        for s, e in subtitles if float(e) > clip_start and float(s) < clip_end
+    )
+    spans = [(s, e) for s, e in spans if e - s > 0.05]
+    if not spans:
+        return full
+    keeps: list[list[float]] = []
+    prev_speech_end: float | None = None
+    for s, e in spans:
+        keep_start = max(clip_start, s - pad)
+        keep_end = min(clip_end, e + pad)
+        if keeps and prev_speech_end is not None and (s - prev_speech_end) <= max_pause:
+            keeps[-1][1] = max(keeps[-1][1], keep_end)      # gap <= max_pause: keep rolling
+        else:
+            keeps.append([keep_start, keep_end])            # first span, or >max_pause gap: cut
+        prev_speech_end = e if prev_speech_end is None else max(prev_speech_end, e)
+    # Enforce the >0.5s minimum-shot rule on jump-cut sub-parts: grow any too-short
+    # kept span into the surrounding trimmed pause instead of letting it flash.
+    for idx, part in enumerate(keeps):
+        start, end = part
+        if end - start >= MIN_SHOT_SECONDS:
+            continue
+        need = MIN_SHOT_SECONDS - (end - start)
+        forward_limit = keeps[idx + 1][0] if idx + 1 < len(keeps) else clip_end
+        grow = min(need, max(0.0, forward_limit - end))
+        end += grow
+        need -= grow
+        if need > 0:
+            back_floor = keeps[idx - 1][1] if idx > 0 else clip_start
+            start -= min(need, max(0.0, start - back_floor))
+        part[0], part[1] = start, end
+    ranges = [(round(a, 3), round(b, 3)) for a, b in keeps]
+    if sum(b - a for a, b in ranges) >= span - 0.25:
+        return full
+    return ranges
+
+
+def trim_source_clip_pauses(source: Path, source_clips: list[NarrationSegment],
+                            subtitles: list[tuple[float, float]], max_pause: float = 1.0) -> None:
+    """Cut >max_pause speech pauses inside each source clip in place.
+
+    Sets ``keep_ranges`` on every clip and shrinks ``audio_duration`` to the kept
+    total so the downstream timeline / SRT timing stays in sync.
+    """
+    for clip in source_clips:
+        span = clip.clip_end - clip.clip_start
+        ranges = _speech_keep_ranges(subtitles, clip.clip_start, clip.clip_end, max_pause)
+        kept = sum(end - start for start, end in ranges)
+        clip.keep_ranges = ranges
+        if kept > 0.5 and kept < span - 0.25:
+            clip.audio_duration = round(kept, 3)
+            print(f"  原片 {clip.insert_role_label}: 剪除停顿 {span:.1f}s -> {kept:.1f}s"
+                  f"（保留 {len(ranges)} 段）", flush=True)
+
+
 def render_video(source: Path, narration: Path | None, segments: list[NarrationSegment], folder: Path,
                  target_seconds: float, include_source_audio: bool = False,
                  source_volume: float = 1.0,
@@ -895,12 +1140,34 @@ def render_video(source: Path, narration: Path | None, segments: list[NarrationS
         vf = "scale=1920:1080:force_original_aspect_ratio=decrease," \
              "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25"
         if segment.row_type == "source_clip" and include_source_audio:
-            cmd = ["ffmpeg", "-y", "-ss", f"{segment.clip_start:.3f}", "-i", str(source),
-                   "-t", f"{segment.audio_duration:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
-                   "-vf", vf, "-af", f"volume={source_volume:.4f}",
-                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-                   "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                   str(clip)]
+            ranges = segment.keep_ranges or [
+                (segment.clip_start, segment.clip_start + segment.audio_duration)
+            ]
+
+            def _cut_range(dst: Path, start: float, end: float) -> None:
+                run(["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(source),
+                     "-t", f"{max(0.05, end - start):.3f}", "-map", "0:v:0", "-map", "0:a:0?",
+                     "-vf", vf, "-af", f"volume={source_volume:.4f}",
+                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                     str(dst)], timeout=600)
+
+            if len(ranges) == 1:
+                _cut_range(clip, ranges[0][0], ranges[0][1])
+            else:
+                # >1s pauses removed → jump-cut: render each kept span, then concat.
+                parts: list[Path] = []
+                for part_index, (start, end) in enumerate(ranges):
+                    part = clip_dir / f"clip_{index:04d}_p{part_index:02d}.mp4"
+                    _cut_range(part, start, end)
+                    parts.append(part)
+                listfile = clip_dir / f"clip_{index:04d}_parts.txt"
+                listfile.write_text(
+                    "".join(f"file '{part.as_posix()}'\n" for part in parts), "utf-8"
+                )
+                run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listfile),
+                     "-c", "copy", str(clip)], timeout=600)
+            return
         else:
             if not segment.audio_file:
                 raise RuntimeError(f"第 {segment.segment_id} 句缺少配音文件")
@@ -1085,10 +1352,12 @@ def main() -> None:
     parser.add_argument("--narration-source-volume", type=float, default=0.0)
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--polish", action="store_true")
+    parser.add_argument("--no-render", action="store_true",
+                        help="只做匹配并写 ★ 匹配报告.json / ★ 字幕.srt，跳过成片渲染")
     args = parser.parse_args()
 
     folder = args.folder.resolve()
-    source, _, _ = discover(folder)
+    source, zh_subtitle, _ = discover(folder)
     duration = probe_duration(source)
     target_seconds = args.target_seconds if args.target_seconds is not None else duration * args.ratio
     target_seconds = max(30.0, min(target_seconds, duration))
@@ -1103,6 +1372,9 @@ def main() -> None:
     source_clips = load_script_table_source_clips(
         folder, args.trim_head, usable_end, 20.0
     ) if args.include_source_audio else []
+    if source_clips:
+        srt_spans = [(float(item.start), float(item.end)) for item in parse_srt(zh_subtitle)]
+        trim_source_clip_pauses(source, source_clips, srt_spans, max_pause=1.0)
     source_insert_seconds = sum(item.audio_duration for item in source_clips)
     narration_target_seconds = max(30.0, target_seconds - source_insert_seconds)
     if source_clips:
@@ -1159,6 +1431,11 @@ def main() -> None:
     data["visual_shot_count"] = len(segments)
     allocator = allocate_visual_all(segments, source_clips, usable_end, folder, args.trim_head)
     timeline = build_timeline(source_clips, segments)
+
+    if args.no_render:
+        write_outputs(data, timeline, allocator, folder)
+        print("--no-render：已生成 ★ 匹配报告.json / ★ 字幕.srt，跳过成片渲染", flush=True)
+        return
 
     output = render_video(source, narration, timeline, folder, target_seconds,
                           args.include_source_audio, args.source_volume,

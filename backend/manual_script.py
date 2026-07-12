@@ -167,8 +167,6 @@ def match_source_block(block: ScriptBlock, subtitles: list[SubtitleLine],
     max_window_seconds = 75.0
     max_extra_chars = max(16, round(len(needle) * 0.55))
     for i, sub in enumerate(subtitles):
-        if sub.end < min_start - 8:
-            continue
         combined = ""
         end_index = i
         for j in range(i, len(subtitles)):
@@ -181,6 +179,9 @@ def match_source_block(block: ScriptBlock, subtitles: list[SubtitleLine],
             if needle in combined:
                 break
         score = _score_match(needle, combined)
+        # Chronological cursor is a SOFT preference, not a hard gate: user scripts
+        # often list 原片 clips out of episode order, so never exclude earlier
+        # subtitles outright — only mildly favour matches at/after the cursor.
         if sub.start < min_start - 1:
             score -= 0.08
         candidate = {
@@ -201,8 +202,6 @@ def match_source_block(block: ScriptBlock, subtitles: list[SubtitleLine],
     for line_text, line_clean in script_lines:
         local_best: tuple[int, int, float] | None = None
         for i in range(search_from, len(subtitles)):
-            if subtitles[i].end < min_start - 8:
-                continue
             if line_matches and subtitles[i].start - subtitles[line_matches[0][0]].start > 95:
                 break
             combined = ""
@@ -211,6 +210,11 @@ def match_source_block(block: ScriptBlock, subtitles: list[SubtitleLine],
                 combined += subtitles[j].clean
                 end_index = j
                 score = _score_match(line_clean, combined)
+                # Soft chronological preference (see match_source_block window loop):
+                # penalise matches before the cursor instead of excluding them, so
+                # out-of-order 原片 clips still resolve to their true position.
+                if subtitles[i].start < min_start - 1:
+                    score -= 0.08
                 current_span = end_index - i
                 best_span = local_best[1] - local_best[0] if local_best else 10_000
                 if local_best is None or score > local_best[2] + 1e-6 or (
@@ -395,6 +399,8 @@ def generate_manual_script_table(settings: AppSettings, script_path: str | None 
         raise ValueError("文案必须同时包含“原片：”和“解说：”段落")
 
     usable_end = max(float(settings.video.trim_head), float(media.duration) - float(settings.video.trim_tail))
+    trim_head = float(settings.video.trim_head)
+    scene_back, scene_forward = 8.0, 80.0
     for index, row in enumerate(rows):
         if row["row_type"] != "narration":
             continue
@@ -404,17 +410,32 @@ def generate_manual_script_table(settings: AppSettings, script_path: str | None 
         next_source = next(
             (item for item in rows[index + 1:] if item["row_type"] == "source_clip"), None
         )
-        preferred_start = float(previous_source["source_end"]) if previous_source else float(settings.video.trim_head)
-        preferred_end = float(next_source["source_start"]) if next_source else usable_end
-        if preferred_end - preferred_start < 2.0:
-            preferred_start = max(float(settings.video.trim_head), float(row["source_start"]))
-            preferred_end = min(usable_end, max(preferred_start + 2.0, float(row["source_end"])))
+        # Anchor the narration's B-roll to the scene of its adjacent quoted clip
+        # (the 原片 it expands on). Source clips are NOT chronological, so the old
+        # "gap between prev and next clip" window is meaningless — we key off the
+        # actual scene time instead, so 解说 about 谁/做什么 pulls that scene.
+        anchor = previous_source or next_source
+        if anchor is not None:
+            anchor_start = float(anchor["source_start"])
+            anchor_end = float(anchor["source_end"])
+        else:
+            anchor_start = max(trim_head, float(row["source_start"]))
+            anchor_end = max(anchor_start + 2.0, float(row["source_end"]))
+        preferred_start = max(trim_head, anchor_start - scene_back)
+        preferred_end = min(usable_end, anchor_end + scene_forward)
+        # Don't bleed into the next quoted scene when it sits just ahead of us.
+        if previous_source is not None and next_source is not None:
+            next_start = float(next_source["source_start"])
+            if anchor_end < next_start < preferred_end:
+                preferred_end = next_start
+        if preferred_end - preferred_start < 6.0:
+            preferred_end = min(usable_end, preferred_start + 30.0)
         row["source_start"] = round(preferred_start, 3)
         row["source_end"] = round(preferred_end, 3)
         row["source_time_text"] = f"{_format_time(preferred_start)} - {_format_time(preferred_end)}"
         row["visual_intent"] = row["text"]
         row["match_score"] = 0.0
-        row["match_reason"] = "按前后原片剧情区间进行人物、动作和场景视觉匹配；成片时全局禁止复用"
+        row["match_reason"] = "锚定相邻原片所在剧情场景，按人物/动作/场景精准匹配画面；全局禁止复用"
 
     narration_text = "\n".join(row["text"] for row in rows if row["row_type"] == "narration")
     payload = {

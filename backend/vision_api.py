@@ -156,16 +156,19 @@ def _subtitle_json(entries: Iterable[SubtitleEntry]) -> list[dict]:
     } for item in entries]
 
 
-def _extract_frames(video: Path, out_dir: Path, interval: float, prefix: str) -> list[FrameSample]:
+def _extract_frames(video: Path, out_dir: Path, interval: float, prefix: str,
+                    *, width: int = 480, height: int = 270, jpeg_q: int = 5) -> list[FrameSample]:
     out_dir.mkdir(parents=True, exist_ok=True)
     pattern = out_dir / f"{prefix}_%06d.jpg"
+    width = max(320, int(width))
+    height = max(180, int(height))
     video_filter = (
-        f"fps=1/{interval:.3f},scale=480:270:force_original_aspect_ratio=decrease,"
-        "pad=480:270:(ow-iw)/2:(oh-ih)/2"
+        f"fps=1/{interval:.3f},scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
     )
     _run([
         ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(video),
-        "-vf", video_filter, "-q:v", "5", str(pattern),
+        "-vf", video_filter, "-q:v", str(max(2, min(8, int(jpeg_q)))), str(pattern),
     ])
     return [
         FrameSample(round(index * interval, 3), 0, image.name, str(image))
@@ -195,13 +198,19 @@ def _clean_model_json(text: str) -> object:
 
 def _vision_prompt(frame_count: int) -> str:
     return (
-        f"你是电视剧短视频剪辑画面分析师。请逐张识别下面 {frame_count} 张视频帧。"
-        "准确描述可见人物、外观线索、地点、正在发生的动作、情绪和镜头景别。"
-        "如果画面或字幕能确认人物姓名，请写姓名；不能确认时只写可见外观，不要猜测。"
-        "请只返回 JSON，不要解释，格式为："
-        "{\"frames\":[{\"frame_id\":\"输入ID\",\"caption\":\"画面描述\","
-        "\"people\":\"人物及外观\",\"scene\":\"地点\",\"action\":\"动作\","
-        "\"emotion\":\"情绪\",\"shot_scale\":\"景别\"}]}"
+        f"你是电视剧短视频剪辑的画面分析师。请逐张精细识别下面 {frame_count} 张视频帧，"
+        "把每帧的详细内容说清楚。\n"
+        "每张帧图片前会给出该帧「已知人物」（来自人脸识别，高度可信）——"
+        "请直接采用这些角色身份，不要另行猜测或改名；「已知人物：无」时只描述可见外观"
+        "（如「短发男子」「红裙女子」），绝不臆造姓名。\n"
+        "对每一帧尽量说清：画面里有几个人、各是谁（用已知人物的角色名）、谁是主体、旁边是谁；"
+        "谁正在说话（看口型/朝向/表情/景别）、其他人在做什么；具体动作、场景地点、"
+        "关键道具或细节、人物情绪、镜头景别。\n"
+        "只返回 JSON，不要解释。格式：\n"
+        "{\"frames\":[{\"frame_id\":\"输入ID\",\"caption\":\"一句话把谁·在干嘛·在哪·和谁说清楚\","
+        "\"people\":[{\"name\":\"角色名或外观\",\"speaking\":true,\"position\":\"居中/左/右/背景\","
+        "\"doing\":\"该人在做什么\"}],\"scene\":\"地点\",\"action\":\"主要动作\","
+        "\"props\":\"关键道具或细节\",\"emotion\":\"情绪\",\"shot_scale\":\"景别\"}]}"
     )
 
 
@@ -214,6 +223,30 @@ def _dashscope_compatible_url() -> str:
     if base.endswith("/chat/completions"):
         return base
     return f"{base}/chat/completions"
+
+
+def _render_people(value: object) -> tuple[str, list]:
+    """把 VL 返回的 people（可能是结构化 list 或字符串）渲染成可读串 + 保留结构。"""
+    if isinstance(value, list):
+        detail = [item for item in value if isinstance(item, dict)]
+        parts = []
+        for item in detail:
+            name = str(item.get("name") or item.get("role") or "").strip()
+            if not name:
+                continue
+            tags = []
+            pos = str(item.get("position") or "").strip()
+            if pos:
+                tags.append(pos)
+            doing = str(item.get("doing") or "").strip()
+            if item.get("speaking") in (True, "true", "True", 1) and "说" not in doing:
+                tags.append("说话")
+            if doing:
+                tags.append(doing)
+            parts.append(f"{name}（{'·'.join(tags)}）" if tags else name)
+        return "；".join(parts), detail
+    text = str(value or "").strip()
+    return text, []
 
 
 def _parse_vision_content(content: str, batch: list[dict]) -> list[dict]:
@@ -241,9 +274,19 @@ def _parse_vision_content(content: str, batch: list[dict]) -> list[dict]:
             item = raw if isinstance(raw, dict) else {"caption": str(raw)}
         if item is None:
             item = {"caption": content[:500]}
+        # people 可能是结构化 list（新 prompt）或字符串（旧/降级）
+        people_text, people_detail = _render_people(item.get("people"))
+        item["people"] = people_text
+        if people_detail:
+            item["people_detail"] = people_detail
         caption = str(item.get("caption") or item.get("visual_caption") or item.get("description") or "").strip()
         if not caption:
-            caption = " ".join(str(item.get(key, "")).strip() for key in ("people", "scene", "action", "emotion") if item.get(key)).strip()
+            pieces = [people_text] + [
+                str(item.get(key, "")).strip()
+                for key in ("action", "scene", "props", "emotion")
+                if item.get(key)
+            ]
+            caption = " ".join(piece for piece in pieces if piece).strip()
         item["caption"] = caption or content[:500]
         item.setdefault("frame_id", source_id)
         item["video_role"] = source["video_role"]
@@ -259,9 +302,10 @@ def _call_bailian_vision(api_key: str, model: str, api_url: str,
                          batch: list[dict], timeout: int = 240) -> list[dict]:
     content: list[dict] = [{"type": "text", "text": _vision_prompt(len(batch))}]
     for item in batch:
+        known = str(item.get("known_people") or "").strip()
         content.append({
             "type": "text",
-            "text": f"frame_id={item['frame_id']}; time={item['time_text']}",
+            "text": f"frame_id={item['frame_id']}; time={item['time_text']}; 已知人物：{known or '无'}",
         })
         image_data = b64encode(Path(item["image_path"]).read_bytes()).decode("ascii")
         content.append({

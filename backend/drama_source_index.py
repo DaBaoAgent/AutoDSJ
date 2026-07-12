@@ -27,6 +27,9 @@ SOURCE_SUBTITLE_FILE = "_source_subtitle_index.json"
 SOURCE_VISUAL_FILE = "_source_visual_index.json"
 SOURCE_CANDIDATE_FILE = "_source_clip_candidates.json"
 QWEN37_PLUS_MAX_BATCH_FRAMES = 500
+# 索引结构版本：抽帧分辨率↑/结构化 prompt/人脸身份注入后旧缓存不再兼容，
+# 版本变化时自动重跑视觉识别（无需用户手动 --force-visual）。
+VISUAL_SCHEMA = "v2-face-720p"
 
 ROLE_WEIGHTS = {
     "hook": 0.32,
@@ -122,6 +125,84 @@ def _write_visual_progress(
     })
 
 
+def _apply_identity(frames: list[dict], identity_map: "dict | None") -> None:
+    """把人脸识别身份覆盖到帧记录：写 people(演员(饰角色)) + identified，并把角色名前置进 caption。
+
+    people 字段是 visual_matcher 建组/身份加分的直接来源；人脸未命中的帧保留 VL 的原描述。
+    """
+    if not identity_map:
+        return
+    from .face_gallery import render_people_field
+    for frame in frames:
+        ident = identity_map.get(str(frame.get("frame_id")))
+        if not ident:
+            continue
+        frame["identified"] = ident
+        people_field = render_people_field(ident)
+        if not people_field:
+            continue
+        frame["people"] = people_field
+        roles = list(dict.fromkeys(r["role"] for r in ident if r.get("role")))
+        caption = str(frame.get("caption") or "").strip()
+        if roles and not any(role in caption for role in roles):
+            role_text = "、".join(roles)
+            frame["caption"] = f"【{role_text}】{caption}" if caption else role_text
+
+
+def _build_identity_map(folder: Path, records: list[dict], settings: AppSettings) -> dict:
+    """对每张抽帧跑本地人脸识别，返回 {frame_id: [识别结果...]}。
+
+    需剧集根有 `_face_gallery.json`（用 `dy faces build` 建）且已装 insightface。
+    任一缺失则返回空 dict，管线自动退回「无身份注入」的纯 VL 描述。
+    """
+    vis = settings.visual
+    if not vis.use_face_gallery:
+        return {}
+    try:
+        from .face_gallery import FaceIdentifier, insightface_available, load_gallery
+    except Exception:
+        return {}
+    # 人脸库全剧集共享：先查单集夹，再回退到剧集根（素材夹的父目录）
+    gallery_path = folder / vis.face_gallery_file
+    if not gallery_path.exists():
+        parent_path = folder.parent / vis.face_gallery_file
+        if parent_path.exists():
+            gallery_path = parent_path
+    gallery = load_gallery(gallery_path)
+    if not gallery:
+        return {}
+    if not insightface_available():
+        print("  ⚠ 检测到人脸库但未安装 insightface，跳过身份识别（仅纯 VL 描述）", flush=True)
+        return {}
+    print(f"  人脸识别开始：库中 {gallery.get('role_count', 0)} 个角色 / "
+          f"{gallery.get('vector_count', 0)} 张参考照", flush=True)
+    try:
+        identifier = FaceIdentifier(
+            gallery,
+            threshold=vis.face_threshold,
+            min_size=vis.face_min_size,
+            det_size=vis.face_det_size,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠ 人脸识别初始化失败，跳过身份注入：{exc}", flush=True)
+        return {}
+    identity_map: dict[str, list] = {}
+    total = len(records)
+    hit = 0
+    for index, record in enumerate(records):
+        try:
+            ident = identifier.identify(record["image_path"], vis.frame_width, vis.frame_height)
+        except Exception:
+            ident = []
+        if ident:
+            identity_map[record["frame_id"]] = ident
+            hit += 1
+        if (index + 1) % 50 == 0 or index + 1 == total:
+            print(f"  人脸识别 {index + 1}/{total}，已识别 {hit} 帧", flush=True)
+    print(f"  人脸识别完成：{hit}/{total} 帧识别到已知角色", flush=True)
+    return identity_map
+
+
 def _annotate_source_frames(
     folder: Path,
     records: list[dict],
@@ -133,6 +214,7 @@ def _annotate_source_frames(
     delay_sec: float = 1.0,
     workers: int = 1,
     force: bool = False,
+    identity_map: "dict | None" = None,
 ) -> dict:
     visual_file = folder / SOURCE_VISUAL_FILE
     source_signature = [
@@ -149,14 +231,17 @@ def _annotate_source_frames(
         if (
             cached.get("model") == model
             and cached.get("frame_interval") == frame_interval
+            and cached.get("visual_schema") == VISUAL_SCHEMA
             and cached.get("source_signature") == source_signature
             and cached.get("success_count", 0) >= len(records)
         ):
+            _apply_identity(cached.get("frames", []), identity_map)
+            _write_json_atomic(visual_file, cached)
             return cached
 
     cached_frames: dict[str, dict] = {}
     cached = _read_json(visual_file)
-    if cached.get("model") == model:
+    if cached.get("model") == model and cached.get("visual_schema") == VISUAL_SCHEMA:
         cached_frames = {
             str(item.get("frame_id")): item
             for item in cached.get("frames", [])
@@ -168,6 +253,7 @@ def _annotate_source_frames(
         "model": model,
         "api_url": "",
         "frame_interval": frame_interval,
+        "visual_schema": VISUAL_SCHEMA,
         "status": "recognizing_frames",
         "message": f"视觉识别准备中：共 {len(records)} 帧",
         "progress": 0,
@@ -182,6 +268,9 @@ def _annotate_source_frames(
 
     pending = []
     for record in records:
+        if identity_map is not None:
+            from .face_gallery import render_known_people
+            record["known_people"] = render_known_people(identity_map.get(record["frame_id"], []))
         cached_item = cached_frames.get(record["frame_id"])
         if cached_item:
             cached_item.update({
@@ -304,6 +393,7 @@ def _annotate_source_frames(
     result["status"] = "complete"
     result["progress"] = 100
     result["message"] = f"视觉识别完成：成功 {result['success_count']}/{len(records)} 帧"
+    _apply_identity(result["frames"], identity_map)
     _write_json_atomic(visual_file, result)
     return result
 
@@ -572,7 +662,12 @@ def build_source_index(
                     progress=max(1, int(index / max(1, len(video_paths)) * 10)),
                     frame_count=len(frame_records),
                 )
-            frames = _extract_frames(video, temp / f"source_{source_index}", frame_interval, f"source{source_index}")
+            frames = _extract_frames(
+                video, temp / f"source_{source_index}", frame_interval, f"source{source_index}",
+                width=settings.visual.frame_width,
+                height=settings.visual.frame_height,
+                jpeg_q=settings.visual.jpeg_q,
+            )
             frame_records.extend(
                 _source_record(frame, source_index, video, frame_interval)
                 for frame in frames
@@ -611,6 +706,7 @@ def build_source_index(
                 delay_sec=visual_delay_sec,
                 workers=visual_workers,
                 force=force_visual,
+                identity_map=_build_identity_map(folder, frame_records, settings),
             )
         else:
             visual_index = _blank_visual_index(frame_records, model, frame_interval)

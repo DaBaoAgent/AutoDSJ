@@ -101,13 +101,16 @@ def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, wo
         if existing.get("exists") and existing.get("interval"):
             interval = float(existing["interval"])
     mode = "重跑" if force else "识别/续跑"
-    print(f"→ 视觉{mode}（模型 {settings.api.visual_model}，并发 {workers}，抽帧 {interval or '自适应'}）…")
+    vis = settings.visual
+    face_hint = "开" if vis.use_face_gallery and (folder / vis.face_gallery_file).exists() else "关/无库"
+    print(f"→ 视觉{mode}（模型 {settings.api.visual_model}，并发 {workers}，抽帧 {interval or '自适应'}，"
+          f"{vis.frame_width}×{vis.frame_height}，每批 {vis.batch}，人脸库 {face_hint}）…")
     result = build_source_index(
         settings,
         siliconflow_api_key=key,
         visual_model=settings.api.visual_model,
         frame_interval=interval,
-        visual_batch_size=8,
+        visual_batch_size=settings.visual.batch,
         visual_delay_sec=1.0,
         visual_workers=workers,
         force_visual=force,
@@ -189,6 +192,12 @@ def cmd_run(args: argparse.Namespace) -> None:
     print(f"  原片 {validation.get('source_clips', 0)} 段 · 解说 {validation.get('narration_blocks', 0)} 段")
 
     print("[4/4] 配音 + 剪辑 + 后处理")
+    if getattr(args, "no_render", False):
+        runner.render(settings, on_line=lambda line: print(f"  {line}"),
+                      concurrency=args.concurrency, no_render=True)
+        report = Path(settings.material_folder) / "★ 匹配报告.json"
+        print(f"\n✔ 匹配完成（未成片）：{report}")
+        return
     output = runner.render(settings, on_line=lambda line: print(f"  {line}"), concurrency=args.concurrency)
     print(f"\n✔ 成片完成：{output}")
 
@@ -217,6 +226,19 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(f"  视觉索引 ✓ 就绪 {vs['success']}/{vs['frame_count']} 帧{tail}")
     else:
         print("  视觉索引 ✗ 未就绪")
+    # 人脸库（认「谁」的主力）；全集共享时在剧集根
+    gallery_path = folder / settings.visual.face_gallery_file
+    if not gallery_path.exists() and (folder.parent / settings.visual.face_gallery_file).exists():
+        gallery_path = folder.parent / settings.visual.face_gallery_file
+    if gallery_path.exists():
+        try:
+            g = json.loads(gallery_path.read_text("utf-8"))
+            loc = "剧集根" if gallery_path.parent == folder.parent else "本集"
+            print(f"  人脸库 ✓ {int(g.get('role_count', 0))} 角色 / {int(g.get('vector_count', 0))} 参考照（{loc}）")
+        except (OSError, json.JSONDecodeError):
+            print("  人脸库 ⚠ 存在但损坏（`dy faces build` 重建）")
+    else:
+        print("  人脸库 · 未建（`dy faces build`，缺则退回纯 VL 描述）")
     print(f"  脚本表 {'✓' if (folder / SCRIPT_TABLE_FILE).exists() else '✗ 未生成'}")
     print(f"  成片 {'✓ ' + str(folder / '★ 成片.mp4') if (folder / '★ 成片.mp4').exists() else '✗ 未生成'}")
 
@@ -271,6 +293,15 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     # API key
     settings = load_settings(mask_keys=False)
     print(f"{'✓' if _dashscope_key(settings) else '✗'} 百炼 DASHSCOPE_API_KEY {'已配置' if _dashscope_key(settings) else '未配置'}")
+    # 人脸识别（可选：认「谁」的主力，缺则退回纯 VL 描述，不阻塞）
+    try:
+        from backend.face_gallery import insightface_available
+        if insightface_available():
+            print("✓ 人脸识别 insightface 就绪（认演员/角色）")
+        else:
+            print("· 人脸识别 insightface 未装（可选；`pip install insightface onnxruntime opencv-python-headless`）")
+    except Exception:
+        print("· 人脸识别 insightface 未装（可选）")
     # Material folder
     folder = settings.material_folder
     if folder and Path(folder).is_dir():
@@ -342,6 +373,92 @@ def cmd_concurrency(args: argparse.Namespace) -> None:
         print(f"当前渲染并发 = {get_concurrency()}")
 
 
+def _faces_locate(settings: AppSettings, *, here: bool = False) -> tuple[Path, Path]:
+    """返回 (参考照目录, 人脸库文件)。默认用剧集根（素材夹父目录）以全集共享；
+    `here=True` 强制用当前单集夹。读取时若单集夹已有库/参考照则优先用单集。"""
+    ep = Path(settings.material_folder)
+    root = ep.parent
+    fd, gf = settings.visual.faces_dir, settings.visual.face_gallery_file
+    if here:
+        base = ep
+    elif (ep / gf).exists() or (ep / fd).is_dir():
+        base = ep
+    else:
+        base = root
+    return base / fd, base / gf
+
+
+def cmd_faces(args: argparse.Namespace) -> None:
+    import shutil
+
+    from backend import face_gallery as fg
+
+    settings = _resolve_settings(getattr(args, "folder", None))
+    faces_root, gallery_path = _faces_locate(settings, here=getattr(args, "here", False))
+
+    if args.faces_action == "add":
+        role = args.role.strip()
+        role_dir = faces_root / role
+        role_dir.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for src in args.images:
+            src_path = Path(src).expanduser()
+            if not src_path.is_file():
+                print(f"  ⚠ 跳过（不存在）：{src_path}")
+                continue
+            dest = role_dir / src_path.name
+            shutil.copy2(src_path, dest)
+            copied += 1
+        # 更新 roster（角色→演员）
+        if args.actor:
+            roster_path = faces_root / fg.ROSTER_FILE
+            roster = {}
+            if roster_path.exists():
+                try:
+                    roster = json.loads(roster_path.read_text("utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    roster = {}
+            roster[role] = args.actor.strip()
+            roster_path.write_text(json.dumps(roster, ensure_ascii=False, indent=2), "utf-8")
+        print(f"已添加 {copied} 张参考照到 {role_dir}"
+              + (f"（演员：{args.actor}）" if args.actor else ""))
+        print("提示：加完所有角色后运行 `dy faces build` 重建人脸库。")
+        return
+
+    if args.faces_action == "list":
+        gallery = fg.load_gallery(gallery_path)
+        if not gallery:
+            print(f"未找到人脸库 {gallery_path}。放好 {faces_root}/<角色>/*.jpg 后运行 `dy faces build`。")
+            # 顺便列出已有参考照目录
+            if faces_root.is_dir():
+                print(f"参考照目录 {faces_root}：")
+                for d in sorted(p for p in faces_root.iterdir() if p.is_dir()):
+                    n = len([f for f in d.iterdir() if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}])
+                    print(f"  · {d.name}：{n} 张")
+            return
+        roster = gallery.get("roster", {})
+        print(f"人脸库 {gallery_path}")
+        print(f"  角色 {gallery.get('role_count', 0)} 个 · 参考向量 {gallery.get('vector_count', 0)} 条")
+        for role, vecs in gallery.get("roles", {}).items():
+            actor = roster.get(role, "")
+            print(f"  · {role}{'（' + actor + '）' if actor else ''}：{len(vecs)} 条")
+        return
+
+    # build
+    if not fg.insightface_available():
+        raise SystemExit("未安装 insightface，无法建库。请先 `pip install insightface onnxruntime opencv-python-headless`。")
+    if not faces_root.is_dir():
+        raise SystemExit(f"参考照目录不存在：{faces_root}\n请先 `dy faces add <角色> <图...>` 或手动放入 {faces_root}/<角色>/*.jpg")
+    print(f"从 {faces_root} 建人脸库（首次会下载 buffalo_l 模型，稍候）…")
+    gallery = fg.build_gallery(faces_root, det_size=settings.visual.face_det_size)
+    fg.save_gallery(gallery, gallery_path)
+    print(f"✓ 人脸库已建：{gallery.get('role_count', 0)} 个角色 / {gallery.get('vector_count', 0)} 条向量 → {gallery_path}")
+    if gallery.get("skipped"):
+        print(f"  ⚠ {len(gallery['skipped'])} 张未检出人脸（已跳过）：")
+        for s in gallery["skipped"][:8]:
+            print(f"    · {s}")
+
+
 # --------------------------------------------------------------------------- #
 # argparse
 # --------------------------------------------------------------------------- #
@@ -360,6 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应）")
     p_run.add_argument("--workers", type=int, default=3, help="视觉识别并发批数（默认3）")
     p_run.add_argument("--concurrency", type=int, default=None, help="渲染并发（覆盖，跳过基准）")
+    p_run.add_argument("--no-render", action="store_true", help="只做匹配并写匹配报告/字幕，不成片")
     p_run.set_defaults(func=cmd_run)
 
     p_detect = sub.add_parser("detect", help="检测素材（原片/字幕/文案）")
@@ -406,6 +524,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_conc.add_argument("--set", type=int, help="手动固定并发数")
     p_conc.add_argument("--benchmark", action="store_true", help="运行基准测试并缓存最优并发")
     p_conc.set_defaults(func=cmd_concurrency)
+
+    p_faces = sub.add_parser("faces", help="人脸库：建库/加参考照/查看（认清画面里是谁）")
+    p_faces.add_argument("--folder", help="素材文件夹（覆盖已保存路径）")
+    faces_sub = p_faces.add_subparsers(dest="faces_action", required=True)
+    pf_build = faces_sub.add_parser("build", help="从 <剧集根>/_faces/<角色>/*.jpg 建人脸库（默认剧集根，全集共享）")
+    pf_build.add_argument("--folder")
+    pf_build.add_argument("--here", action="store_true", help="建到当前单集夹而非剧集根")
+    pf_add = faces_sub.add_parser("add", help="添加某角色的参考照并可选记录演员名")
+    pf_add.add_argument("role", help="角色名（如 黄亦玫）")
+    pf_add.add_argument("images", nargs="+", help="一张或多张清晰正脸图片路径")
+    pf_add.add_argument("--actor", help="该角色的演员名（写入 roster，索引会标成「演员（饰角色）」）")
+    pf_add.add_argument("--folder")
+    pf_add.add_argument("--here", action="store_true", help="加到当前单集夹而非剧集根")
+    pf_list = faces_sub.add_parser("list", help="查看当前人脸库/参考照目录")
+    pf_list.add_argument("--folder")
+    pf_list.add_argument("--here", action="store_true", help="只看当前单集夹")
+    p_faces.set_defaults(func=cmd_faces)
 
     return parser
 

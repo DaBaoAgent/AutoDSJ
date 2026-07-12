@@ -33,7 +33,8 @@ def _log(on_line: LogFn | None, message: str) -> None:
     (on_line or print)(message)
 
 
-def build_pipeline_command(settings: AppSettings, *, concurrency: int | None = None) -> list[str]:
+def build_pipeline_command(settings: AppSettings, *, concurrency: int | None = None,
+                           no_render: bool = False) -> list[str]:
     """Translate settings into the ``anchored_pipeline.py`` argv."""
     media = detect_materials(settings.material_folder, settings.drama.source_count)
     target_seconds = max(30.0, media.duration - settings.video.trim_head - settings.video.trim_tail)
@@ -104,6 +105,8 @@ def build_pipeline_command(settings: AppSettings, *, concurrency: int | None = N
     if voice.mode == "clone" and voice.provider == "gpt_sovits" and voice.polish_audio:
         cmd.append("--polish")
     cmd += ["--concurrency", str(concurrency if concurrency and concurrency > 0 else get_concurrency())]
+    if no_render:
+        cmd.append("--no-render")
     return cmd
 
 
@@ -137,8 +140,13 @@ def _stream_subprocess(cmd: list[str], settings: AppSettings, on_line: LogFn | N
         raise RuntimeError(f"成片内核退出，代码 {code}" + (f"\n{detail}" if detail else ""))
 
 
-def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: int | None = None) -> Path:
-    """Run the anchored pipeline + post-process into the final ``★ 成片.mp4``."""
+def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: int | None = None,
+           no_render: bool = False) -> Path | None:
+    """Run the anchored pipeline + post-process into the final ``★ 成片.mp4``.
+
+    When ``no_render`` is set, the pipeline only performs matching and writes
+    ★ 匹配报告.json / ★ 字幕.srt; no video is encoded and ``None`` is returned.
+    """
     folder = Path(settings.material_folder)
     ensure_script_table(settings)
     media = detect_materials(settings.material_folder, settings.drama.source_count)
@@ -149,7 +157,17 @@ def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: 
         f"{settings.drama.source_play_volume}% / 解说段原片 "
         f"{settings.drama.narration_source_volume}% / 配音 100%",
     )
-    _stream_subprocess(build_pipeline_command(settings, concurrency=concurrency), settings, on_line)
+    _stream_subprocess(
+        build_pipeline_command(settings, concurrency=concurrency, no_render=no_render),
+        settings, on_line,
+    )
+
+    if no_render:
+        report = folder / "★ 匹配报告.json"
+        if not report.exists():
+            raise RuntimeError("流水线结束但未找到匹配报告")
+        _log(on_line, f"匹配报告已生成（--no-render，未成片）：{report}")
+        return None
 
     output = folder / OUTPUT_NAME
     if not output.exists():

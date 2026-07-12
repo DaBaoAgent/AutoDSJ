@@ -53,8 +53,29 @@ class VideoSettings(BaseModel):
 class DramaSettings(BaseModel):
     source_count: int = Field(1, ge=1, le=10)
     keep_source_audio: bool = True
-    source_play_volume: int = Field(100, ge=0, le=100)
+    source_play_volume: int = Field(80, ge=0, le=100)
     narration_source_volume: int = Field(0, ge=0, le=100)
+
+
+class VisualSettings(BaseModel):
+    """视觉索引识别精度控制（2026-07 精度重构）。
+
+    高清抽帧 + 少帧/批 + 本地人脸库，让索引看清「谁·在干嘛·在哪·细节·旁边谁」。
+    """
+
+    # 抽帧分辨率：旧值 480×270 人脸仅 30-60px，认不出演员；提到 720p 人脸 150-300px。
+    frame_width: int = Field(1280, ge=480, le=1920)
+    frame_height: int = Field(720, ge=270, le=1080)
+    jpeg_q: int = Field(3, ge=2, le=8)  # ffmpeg -q:v，越小越清（2 最清，5 旧值）
+    # 每次喂给 VL 的帧数：旧值 8 稀释注意力；1-2 帧描述更深。
+    batch: int = Field(2, ge=1, le=8)
+    # 本地人脸库（InsightFace/ArcFace）——认「谁」的主力，纯本地零 API 费。
+    use_face_gallery: bool = True
+    faces_dir: str = "_faces"          # 相对剧集根目录（全集共享）
+    face_gallery_file: str = "_face_gallery.json"
+    face_threshold: float = Field(0.38, ge=0.20, le=0.80)  # 余弦阈值，越高越严
+    face_min_size: int = Field(46, ge=20, le=400)  # 人脸框最小边(px)，太小不信
+    face_det_size: int = Field(640, ge=320, le=1280)  # 检测输入尺寸
 
 
 class AppSettings(BaseModel):
@@ -63,6 +84,7 @@ class AppSettings(BaseModel):
     video: VideoSettings = VideoSettings()
     voice: VoiceSettings = VoiceSettings()
     drama: DramaSettings = DramaSettings()
+    visual: VisualSettings = VisualSettings()
 
     @model_validator(mode="after")
     def normalize_audio_options(self):
