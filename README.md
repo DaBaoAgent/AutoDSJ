@@ -189,13 +189,13 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
   "voice": {
     "mode": "clone",
     "provider": "qwen",
-    "volume": 100,
+    "volume": 120,
     "speech_rate": 1.0,
     "pitch": 1.0
   },
   "drama": {
     "keep_source_audio": true,
-    "source_play_volume": 100,
+    "source_play_volume": 50,
     "narration_source_volume": 0
   },
   "visual": {
@@ -212,7 +212,7 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 }
 ```
 
-101%–200% 的配音音量由本地增益和限幅器实现，避免直接削波；100% 为原样输出。原片对白段与配音统一按 100% 播放，两者等响，适合手机正常音量直接观看；解说覆盖处原片声默认静音。
+101%–200% 的配音音量由本地增益和限幅器实现，避免直接削波；100% 为原样输出。DY 成片固定默认配音 120%、原片对白 50%；解说覆盖处原片声默认静音。
 
 ## 清理规则
 

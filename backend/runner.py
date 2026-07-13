@@ -122,7 +122,7 @@ def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: 
         on_line,
         "音频规则：原片音量 "
         f"{settings.drama.source_play_volume}% / 解说段原片 "
-        f"{settings.drama.narration_source_volume}% / 配音 100%",
+        f"{settings.drama.narration_source_volume}% / 配音 {settings.voice.volume}%",
     )
     _stream_subprocess(
         build_pipeline_command(settings, concurrency=concurrency, no_render=no_render,

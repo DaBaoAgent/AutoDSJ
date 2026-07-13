@@ -182,6 +182,9 @@ def dense_query_vectors(folder: Path, texts: list[str], api_key: str) -> dict[st
                 return {text: vector for text, vector in zip(unique, cached["vectors"])}
         except (OSError, ValueError, TypeError):
             pass
-    vectors = embed_texts(unique, api_key, batch=10, workers=4)
+    # Two concurrent batches are more reliable on consumer Windows networks;
+    # four parallel TLS streams caused intermittent EOF failures on long
+    # narration sets and discarded the otherwise valid event-vector cache.
+    vectors = embed_texts(unique, api_key, batch=10, workers=2)
     path.write_text(json.dumps({"signature": signature, "vectors": vectors}), "utf-8")
     return {text: vector for text, vector in zip(unique, vectors)}
