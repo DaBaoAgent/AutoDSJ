@@ -8,5 +8,4 @@ cryptography>=42.0,<46
 
 # 说明：
 # - FFmpeg / FFprobe 由 tools/ffmpeg/bin 内置提供，无需 pip 安装。
-# - numpy 仅 gpt_sovits_batch.py 需要，且运行在 GPT-SoVITS 引擎自带的 python 环境，
 #   不属于本主环境依赖；默认百炼克隆音色链路不涉及。

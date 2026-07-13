@@ -59,18 +59,3 @@ def ffmpeg() -> str:
 def ffprobe() -> str:
     return media_tool("ffprobe")
 
-
-def gpt_sovits_python(engine: Path) -> Path:
-    candidates = [
-        engine / ".venv" / "Scripts" / "python.exe",
-        engine / "runtime" / "python310" / "python.exe",
-        engine / "runtime" / "python.exe",
-        engine / "python.exe",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    import sys
-
-    return Path(sys.executable)

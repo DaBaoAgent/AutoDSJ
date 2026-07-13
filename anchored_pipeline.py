@@ -11,14 +11,12 @@ import argparse
 import base64
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
 import socket
 import subprocess
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -26,39 +24,24 @@ import wave
 
 from backend.concurrency import get_concurrency
 from backend.ad_filter import detect_ad_intervals
-from backend.media_tools import ffmpeg, ffprobe, gpt_sovits_python
+from backend.media_tools import ffmpeg, ffprobe
 from backend.net_retry import retry_call
+from backend.scene_map import scene_map_digest, validate_scene_map
 from backend.vision_api import parse_srt
 from backend.qwen_voice import (
     DEFAULT_QWEN_CLONE_MODEL,
     DEFAULT_QWEN_REFERENCE_AUDIO,
     DEFAULT_QWEN_REFERENCE_TEXT_PATH,
-    ensure_bailian_clone_voice,
+    ensure_qwen_clone_voice,
     is_qwen_realtime_model,
     read_reference_text,
-    synthesize_bailian_http_to_file,
+    synthesize_qwen_http_to_file,
 )
 from backend.visual_matcher import (
     VisualIntervalAllocator, load_visual_frames, split_visual_clauses, dominant_character_group,
 )
 
 ROOT = Path(__file__).resolve().parent
-def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    try:
-        value = int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
-
-
-def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
-    try:
-        value = float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
-
-
 def force_ipv4() -> None:
     """DashScope WebSocket is unreliable when Windows selects an unreachable IPv6 route."""
     original = socket.getaddrinfo
@@ -293,142 +276,6 @@ def write_plain_script(data: dict, output: Path) -> None:
     output.write_text("\n".join(x["text"] for x in data["segments"]), "utf-8")
 
 
-def synthesize_cosyvoice(segments: list[NarrationSegment], folder: Path,
-                         api_key: str, model: str, voice: str, rate: float,
-                         speech_texts: dict[int, str] | None = None) -> None:
-    force_ipv4()
-    try:
-        import dashscope
-        from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
-    except ImportError as exc:
-        raise RuntimeError("缺少 dashscope；请先 pip install dashscope") from exc
-    dashscope.api_key = api_key
-    seg_dir = folder / "_anchored_tts"
-    seg_dir.mkdir(exist_ok=True)
-    for i, segment in enumerate(segments, 1):
-        tts_text = (speech_texts or {}).get(segment.segment_id, segment.text)
-        digest = hashlib.sha1(tts_text.encode("utf-8")).hexdigest()[:10]
-        target = seg_dir / f"tts_{i:04d}_{digest}.mp3"
-        if not target.exists() or target.stat().st_size < 1000:
-            syn = SpeechSynthesizer(model=model, voice=voice,
-                                    format=AudioFormat.MP3_24000HZ_MONO_256KBPS,
-                                    speech_rate=rate)
-            audio = retry_call(
-                lambda: syn.call(tts_text),
-                attempts=4, base_delay=2.0,
-                on_retry=lambda a, e, d: print(
-                    f"  [重试] CosyVoice 第{i}段 第{a}次失败：{e}；{d:.0f}s 后重试", flush=True),
-            )
-            target.write_bytes(audio)
-        segment.audio_file = str(target)
-        segment.audio_duration = probe_duration(target)
-        print(f"  TTS {i}/{len(segments)} {segment.audio_duration:.2f}s")
-
-
-def synthesize_gpt_sovits(segments: list[NarrationSegment], folder: Path, engine: Path,
-                          reference: Path, prompt_text: str, rate: float,
-                          seed: int = 20260711,
-                          text_split_method: str = "cut0",
-                          temperature: float = 0.75,
-                          top_p: float = 0.9,
-                          top_k: int = 10,
-                          repetition_penalty: float = 1.3,
-                          polish: bool = False,
-                          speech_texts: dict[int, str] | None = None) -> None:
-    if not engine.exists():
-        raise RuntimeError(f"GPT-SoVITS 引擎不存在: {engine}")
-    jobs = folder / "_gpt_sovits_jobs.json"
-    device = os.environ.get("DABAOAI_GPT_SOVITS_DEVICE", "auto").strip().lower() or "auto"
-    voice_digest = hashlib.sha1(
-        (
-            f"{reference.resolve()}|{prompt_text}|{rate:.3f}|{device}|{seed}|"
-            f"{text_split_method}|{temperature:.3f}|{top_p:.3f}|{top_k}|"
-            f"{repetition_penalty:.3f}|polish={polish}"
-        ).encode(
-            "utf-8", errors="ignore"
-        )
-    ).hexdigest()[:10]
-    seg_dir = folder / f"_anchored_tts_gpt_sovits_{voice_digest}"
-    seg_dir.mkdir(exist_ok=True)
-    items = []
-    targets = []
-    for i, segment in enumerate(segments, 1):
-        tts_text = (speech_texts or {}).get(segment.segment_id, segment.text)
-        digest = hashlib.sha1(tts_text.encode("utf-8")).hexdigest()[:10]
-        filename = f"tts_{i:04d}_{digest}.wav"
-        items.append({"text": tts_text, "filename": filename})
-        targets.append(seg_dir / filename)
-    chunk_size = _env_int("DABAOAI_GPT_SOVITS_CHUNK_SIZE", 16, 1, 64)
-    chunk_cooldown = _env_float("DABAOAI_GPT_SOVITS_CHUNK_COOLDOWN_SECONDS", 8.0, 0.0, 60.0)
-    fallback_to_cpu = os.environ.get("DABAOAI_GPT_SOVITS_FALLBACK_CPU", "1").strip() != "0"
-    payload = {
-        "engine": str(engine), "reference": str(reference), "prompt_text": prompt_text,
-        "output_dir": str(seg_dir), "items": items, "speed": rate, "device": device,
-        "seed": int(seed), "text_split_method": text_split_method,
-        "temperature": float(temperature),
-        "top_p": float(top_p),
-        "top_k": int(top_k),
-        "repetition_penalty": float(repetition_penalty),
-        "max_workers": 1,
-        "cpu_threads": _env_int("DABAOAI_GPT_SOVITS_CPU_THREADS", 2, 1, 4),
-        "cooldown_seconds": _env_float("DABAOAI_GPT_SOVITS_COOLDOWN_SECONDS", 0.8, 0.0, 5.0),
-        "clear_cuda_cache": True,
-        "chunk_size": chunk_size,
-        "chunk_cooldown_seconds": chunk_cooldown,
-    }
-    jobs.write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
-    runner = ROOT / "gpt_sovits_batch.py"
-    local_python = gpt_sovits_python(engine)
-    if not local_python.exists():
-        raise RuntimeError(f"GPT-SoVITS 独立运行环境不存在: {local_python}")
-    print(
-        f"  GPT-SoVITS 整段稳定模式：device={device}, seed={seed}, "
-        f"split={text_split_method}, temp={temperature:.2f}, top_p={top_p:.2f}, "
-        f"top_k={top_k}, repeat={repetition_penalty:.2f}, "
-        f"每批{chunk_size}段, 批间隔{chunk_cooldown:.1f}s"
-    )
-    for chunk_start in range(0, len(items), chunk_size):
-        chunk_items = items[chunk_start:chunk_start + chunk_size]
-        chunk_targets = targets[chunk_start:chunk_start + chunk_size]
-        chunk_index = chunk_start // chunk_size + 1
-        chunk_count = math.ceil(len(items) / chunk_size)
-        if all(target.exists() and target.stat().st_size > 1000 for target in chunk_targets):
-            print(f"  GPT-SoVITS 分批 {chunk_index}/{chunk_count} 已存在，跳过")
-            continue
-
-        part_payload = dict(payload)
-        part_payload["items"] = chunk_items
-        part_payload["start_index"] = chunk_start + 1
-        part_payload["total_items"] = len(items)
-        part_jobs = folder / f"_gpt_sovits_jobs_part_{chunk_index:03d}.json"
-        part_jobs.write_text(json.dumps(part_payload, ensure_ascii=False, indent=2), "utf-8")
-        try:
-            run([str(local_python), str(runner), str(part_jobs)], timeout=12 * 3600, capture=False)
-        except subprocess.CalledProcessError:
-            if device in ("auto", "cuda", "gpu") and fallback_to_cpu:
-                print(f"  [WARN] GPT-SoVITS CUDA 分批 {chunk_index}/{chunk_count} 失败，改用 CPU 重试该批")
-                part_payload["device"] = "cpu"
-                part_jobs.write_text(json.dumps(part_payload, ensure_ascii=False, indent=2), "utf-8")
-                run([str(local_python), str(runner), str(part_jobs)], timeout=12 * 3600, capture=False)
-            else:
-                raise
-        if chunk_cooldown > 0 and chunk_start + chunk_size < len(items):
-            time.sleep(chunk_cooldown)
-    for segment, target in zip(segments, targets):
-        if not target.exists():
-            raise RuntimeError(f"GPT-SoVITS 未生成 {target.name}")
-        if polish:
-            polished = target.with_stem(target.stem + "_polished")
-            run(["ffmpeg", "-y", "-i", str(target),
-                 "-af", "highpass=f=80,equalizer=f=3000:t=q:w=1:g=2,"
-                        "compand=attacks=0.005:decays=0.05:points=-80/-80|-30/-10|0/-3:gain=2,"
-                        "loudnorm=I=-19:TP=-1.5:LRA=7",
-                 "-ar", "48000", "-ac", "1", str(polished)], timeout=300)
-            target.unlink()
-            polished.rename(target)
-        segment.audio_file = str(target)
-        segment.audio_duration = probe_duration(target)
-
 
 def synthesize_qwen_clone(segments: list[NarrationSegment], folder: Path, api_key: str,
                           model: str, voice: str, rate: float,
@@ -440,14 +287,18 @@ def synthesize_qwen_clone(segments: list[NarrationSegment], folder: Path, api_ke
     force_ipv4()
     model = model or DEFAULT_QWEN_CLONE_MODEL
     if not is_qwen_realtime_model(model):
-        voice, _, _ = ensure_bailian_clone_voice(
-            api_key,
-            model,
-            voice,
-            reference_audio,
-            reference_text_path,
-            ROOT / "voice_dabao_bailian.json",
-        )
+        # A configured clone ID is already reusable.  Re-validating/creating it
+        # on every render adds a network round-trip before the local WAV cache
+        # can be used, and can stall otherwise offline-safe rerenders.
+        if not voice:
+            voice, _, _ = ensure_qwen_clone_voice(
+                api_key,
+                model,
+                voice,
+                reference_audio,
+                reference_text_path,
+                ROOT / "voice_dabao_bailian.json",
+            )
         reference_text = read_reference_text(reference_text_path)
         safe_voice = re.sub(r"[^A-Za-z0-9_-]", "_", voice)[-32:]
         voice_digest = hashlib.sha1(
@@ -463,14 +314,21 @@ def synthesize_qwen_clone(segments: list[NarrationSegment], folder: Path, api_ke
             nonlocal completed
             tts_text = (speech_texts or {}).get(segment.segment_id, segment.text)
             digest = hashlib.sha1(tts_text.encode("utf-8")).hexdigest()[:10]
-            target = seg_dir / f"tts_{index:04d}_{digest}.wav"
-            if not target.exists() or target.stat().st_size < 1000:
+            raw_target = seg_dir / f"tts_{index:04d}_{digest}.wav"
+            target = (seg_dir / f"tts_{index:04d}_{digest}_v{int(volume)}.wav"
+                      if int(volume) > 100 else raw_target)
+            if not raw_target.exists() or raw_target.stat().st_size < 1000:
                 retry_call(
-                    lambda: synthesize_bailian_http_to_file(api_key, model, voice, tts_text, target),
+                    lambda: synthesize_qwen_http_to_file(api_key, model, voice, tts_text, raw_target),
                     attempts=4, base_delay=2.0,
                     on_retry=lambda a, e, d: print(
                         f"  [重试] 配音第{index}段 第{a}次失败：{e}；{d:.0f}s 后重试", flush=True),
                 )
+            if int(volume) > 100 and (not target.exists() or target.stat().st_size < 1000):
+                gain = max(1.0, min(2.0, float(volume) / 100.0))
+                run(["ffmpeg", "-y", "-i", str(raw_target), "-af",
+                     f"volume={gain:.3f},alimiter=limit=0.98", "-c:a", "pcm_s16le", str(target)],
+                    timeout=300)
             segment.audio_file = str(target)
             segment.audio_duration = probe_duration(target)
             with progress_lock:
@@ -513,7 +371,8 @@ def synthesize_qwen_clone(segments: list[NarrationSegment], folder: Path, api_ke
     dashscope.api_key = api_key
     safe_voice = re.sub(r"[^A-Za-z0-9_-]", "_", voice)[-32:]
     safe_model = re.sub(r"[^A-Za-z0-9_-]", "_", model)[-32:]
-    volume = max(0, min(100, int(volume)))
+    requested_volume = max(0, min(200, int(volume)))
+    volume = min(100, requested_volume)
     pitch = max(0.5, min(2.0, float(pitch)))
     seg_dir = folder / f"_anchored_tts_qwen_{safe_model}_{safe_voice}_r{rate:.2f}_v{volume}_p{pitch:.2f}"
     seg_dir.mkdir(exist_ok=True)
@@ -889,6 +748,50 @@ def allocate_visual_all(segments: list[NarrationSegment], source_clips: list[Nar
     return allocator
 
 
+def apply_hierarchical_takeover(segments: list[NarrationSegment], allocator: VisualIntervalAllocator,
+                                folder: Path) -> None:
+    path = folder / "★ 分层接管预演报告.json"
+    if not path.exists():
+        raise RuntimeError("缺少 ★ 分层接管预演报告.json，请先运行 dy shadow-match")
+    payload = json.loads(path.read_text("utf-8"))
+    scene_path = folder / "_scene_map.json"
+    validate_scene_map(folder)
+    if payload.get("scene_map_sha256") != scene_map_digest(scene_path):
+        raise RuntimeError("场景地图已在预演后变化，请重新运行 dy shadow-match")
+    if not payload.get("safe_to_render") or payload.get("planning_summary", {}).get("unresolved"):
+        raise RuntimeError("分层接管预演未通过，禁止接管正式链路")
+    planned = {(int(item["script_row_id"]), int(item["shot_index"])): item
+               for item in payload.get("segments", [])}
+    narration = [item for item in segments if item.row_type == "narration"]
+    if len(planned) != len(narration):
+        raise RuntimeError(f"接管预演分镜数不一致：预演 {len(planned)} / 当前 {len(narration)}")
+    retained = [item for item in allocator.used if str(item[2]).startswith("原片行")]
+    new_used = list(retained)
+    narration_used: list[tuple[float, float, str]] = []
+    for segment in narration:
+        stable_key = (int(segment.script_row_id), int(segment.shot_index))
+        item = planned.get(stable_key)
+        if not item or str(item.get("text") or "") != str(segment.text or ""):
+            raise RuntimeError(f"接管预演与当前文案不一致：分镜 {segment.segment_id}")
+        start, end = float(item["clip_start"]), float(item["clip_end"])
+        if abs((end - start) - float(segment.audio_duration)) > 0.01:
+            raise RuntimeError(f"接管预演与当前配音时长不一致：分镜 {segment.segment_id}")
+        is_reviewed_reuse = (item.get("planned_event_id") == "manual_override"
+                             or ":plan" in str(item.get("continuity_group_id") or ""))
+        unavailable = narration_used if is_reviewed_reuse else [*allocator.blocked, *new_used]
+        if any(not (end + allocator.guard <= left or start >= right + allocator.guard)
+               for left, right, _ in unavailable):
+            raise RuntimeError(f"接管区间冲突或命中广告：分镜 {segment.segment_id}")
+        segment.clip_start, segment.clip_end = start, end
+        segment.visual_match_score = float(item.get("shadow_score") or 0)
+        segment.visual_match_evidence = f"分层接管 {item.get('planned_event_id')} / {item.get('scene_hint')}"
+        segment.match_confidence = "H"
+        new_used.append((start, end, f"分层解说{segment.segment_id}"))
+        narration_used.append((start, end, f"分层解说{segment.segment_id}"))
+    allocator.used = new_used
+    print(f"分层匹配正式接管：{len(narration)} 个解说分镜", flush=True)
+
+
 def load_script_table_source_clips(folder: Path, usable_start: float, usable_end: float,
                                    clip_length: float) -> list[NarrationSegment]:
     table_path = folder / "_drama_script_table.json"
@@ -1130,6 +1033,10 @@ def render_video(source: Path, narration: Path | None, segments: list[NarrationS
                  target_seconds: float, include_source_audio: bool = False,
                  source_volume: float = 1.0,
                  narration_source_volume: float = 0.0) -> Path:
+    # 硬性规范：配音与原片统一响度归一化到 -16 LUFS（手机播放标准），
+    # 保证「配音和原片在正常听的时候音量一致」。纯增益(volume=)无法跨不同
+    # 音源等响——克隆音色天然比原片轻近 19 LUFS，必须用 loudnorm 归一化。
+    loudnorm = "loudnorm=I=-16:TP=-1.5:LRA=11"
     clip_dir = folder / "_anchored_clips"
     if clip_dir.exists():
         shutil.rmtree(clip_dir)
@@ -1147,7 +1054,7 @@ def render_video(source: Path, narration: Path | None, segments: list[NarrationS
             def _cut_range(dst: Path, start: float, end: float) -> None:
                 run(["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(source),
                      "-t", f"{max(0.05, end - start):.3f}", "-map", "0:v:0", "-map", "0:a:0?",
-                     "-vf", vf, "-af", f"volume={source_volume:.4f}",
+                     "-vf", vf, "-af", f"{loudnorm},volume={source_volume:.4f}",
                      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                      str(dst)], timeout=600)
@@ -1174,7 +1081,7 @@ def render_video(source: Path, narration: Path | None, segments: list[NarrationS
             if narration_source_volume > 0:
                 mix = (
                     f"[0:a:0]volume={narration_source_volume:.4f}[srca];"
-                    "[1:a:0]volume=1.0[voice];"
+                    f"[1:a:0]{loudnorm}[voice];"
                     "[srca][voice]amix=inputs=2:duration=shortest:normalize=0[aout]"
                 )
                 cmd = ["ffmpeg", "-y", "-ss", f"{segment.clip_start:.3f}", "-i", str(source),
@@ -1189,7 +1096,7 @@ def render_video(source: Path, narration: Path | None, segments: list[NarrationS
                 cmd = ["ffmpeg", "-y", "-ss", f"{segment.clip_start:.3f}", "-i", str(source),
                        "-ss", f"{segment.audio_offset:.3f}", "-i", segment.audio_file,
                        "-t", f"{segment.audio_duration:.3f}",
-                       "-map", "0:v:0", "-map", "1:a:0", "-vf", vf, "-af", "volume=1.0",
+                       "-map", "0:v:0", "-map", "1:a:0", "-vf", vf, "-af", loudnorm,
                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                        "-shortest", str(clip)]
@@ -1322,16 +1229,6 @@ def main() -> None:
     parser.add_argument("folder", type=Path)
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--target-seconds", type=float, default=None)
-    parser.add_argument("--tts-backend", choices=["gpt-sovits", "cosyvoice", "qwen-clone"],
-                        default="gpt-sovits")
-    parser.add_argument("--gpt-sovits", type=Path, default=Path(r"D:\GPT-SoVITS"))
-    parser.add_argument("--reference", type=Path,
-                        default=Path(r"D:\BaiduSyncdisk\18 艾伦全自动解说\克隆音色\yatou2.wav"))
-    parser.add_argument(
-        "--prompt-text",
-        default="",
-        help="必须与参考音频逐字一致",
-    )
     parser.add_argument("--qwen-voice", default="")
     parser.add_argument("--qwen-model", default="")
     parser.add_argument("--qwen-reference-audio", default=DEFAULT_QWEN_REFERENCE_AUDIO)
@@ -1339,21 +1236,16 @@ def main() -> None:
     parser.add_argument("--qwen-volume", type=int, default=55)
     parser.add_argument("--qwen-pitch", type=float, default=1.0)
     parser.add_argument("--speech-rate", type=float, default=1.0)
-    parser.add_argument("--gpt-sovits-seed", type=int, default=20260711)
-    parser.add_argument("--gpt-sovits-text-split-method", default="cut0")
-    parser.add_argument("--gpt-sovits-temperature", type=float, default=0.75)
-    parser.add_argument("--gpt-sovits-top-p", type=float, default=0.9)
-    parser.add_argument("--gpt-sovits-top-k", type=int, default=10)
-    parser.add_argument("--gpt-sovits-repetition-penalty", type=float, default=1.3)
     parser.add_argument("--trim-head", type=float, default=6.0)
     parser.add_argument("--trim-tail", type=float, default=15.0)
     parser.add_argument("--include-source-audio", action="store_true")
     parser.add_argument("--source-volume", type=float, default=1.0)
     parser.add_argument("--narration-source-volume", type=float, default=0.0)
     parser.add_argument("--concurrency", type=int, default=None)
-    parser.add_argument("--polish", action="store_true")
     parser.add_argument("--no-render", action="store_true",
                         help="只做匹配并写 ★ 匹配报告.json / ★ 字幕.srt，跳过成片渲染")
+    parser.add_argument("--hierarchical-match", action="store_true",
+                        help="使用已验证的分层接管预演覆盖正式解说画面")
     args = parser.parse_args()
 
     folder = args.folder.resolve()
@@ -1368,7 +1260,6 @@ def main() -> None:
     if not manual_script:
         raise RuntimeError("只支持用户上传的“原片/解说”手写文案，请先点击生成脚本表")
     env = {**load_env(ROOT / ".env"), **os.environ}
-    config = json.loads((ROOT / "config.json").read_text("utf-8"))
     source_clips = load_script_table_source_clips(
         folder, args.trim_head, usable_end, 20.0
     ) if args.include_source_audio else []
@@ -1393,43 +1284,29 @@ def main() -> None:
     print(f"文案 {len(data['segments'])} 段，{sum(len(x['text']) for x in data['segments'])} 字")
     parent_segments = [NarrationSegment(**x) for x in data["segments"]]
     speech_texts = prepare_tts_speech_script(parent_segments, folder)
-    if args.tts_backend == "gpt-sovits":
-        synthesize_gpt_sovits(parent_segments, folder, args.gpt_sovits, args.reference,
-                              args.prompt_text, args.speech_rate, seed=args.gpt_sovits_seed,
-                              text_split_method=args.gpt_sovits_text_split_method,
-                              temperature=args.gpt_sovits_temperature,
-                              top_p=args.gpt_sovits_top_p,
-                              top_k=args.gpt_sovits_top_k,
-                              repetition_penalty=args.gpt_sovits_repetition_penalty,
-                              polish=args.polish,
-                              speech_texts=speech_texts)
-    elif args.tts_backend == "cosyvoice":
-        cosy = config.get("cosyvoice", {})
-        synthesize_cosyvoice(parent_segments, folder, env.get("DASHSCOPE_API_KEY", ""),
-                             cosy.get("model", "cosyvoice-v3.5-plus"), cosy.get("voice_id", ""),
-                             args.speech_rate, speech_texts=speech_texts)
-    else:
-        profile_path = ROOT / "voice_dabao_bailian.json"
-        profile = json.loads(profile_path.read_text("utf-8")) if profile_path.exists() else {}
-        voice = args.qwen_voice or profile.get("voice", "")
-        model = args.qwen_model or profile.get("target_model", DEFAULT_QWEN_CLONE_MODEL)
-        reference_audio = args.qwen_reference_audio or profile.get("reference_audio", DEFAULT_QWEN_REFERENCE_AUDIO)
-        reference_text_path = args.qwen_reference_text_path or profile.get("reference_text_path", DEFAULT_QWEN_REFERENCE_TEXT_PATH)
-        if not voice:
-            if is_qwen_realtime_model(model):
-                raise RuntimeError("未配置 Qwen 复刻音色 ID")
-            voice = profile.get("voice", "")
-        synthesize_qwen_clone(parent_segments, folder, env.get("DASHSCOPE_API_KEY", ""),
-                              model, voice, args.speech_rate,
-                              volume=args.qwen_volume, pitch=args.qwen_pitch,
-                              reference_audio=reference_audio,
-                              reference_text_path=reference_text_path,
-                              speech_texts=speech_texts)
+    profile_path = ROOT / "voice_dabao_bailian.json"
+    profile = json.loads(profile_path.read_text("utf-8")) if profile_path.exists() else {}
+    voice = args.qwen_voice or profile.get("voice", "")
+    model = args.qwen_model or profile.get("target_model", DEFAULT_QWEN_CLONE_MODEL)
+    reference_audio = args.qwen_reference_audio or profile.get("reference_audio", DEFAULT_QWEN_REFERENCE_AUDIO)
+    reference_text_path = args.qwen_reference_text_path or profile.get("reference_text_path", DEFAULT_QWEN_REFERENCE_TEXT_PATH)
+    if not voice:
+        if is_qwen_realtime_model(model):
+            raise RuntimeError("未配置 Qwen 复刻音色 ID")
+        voice = profile.get("voice", "")
+    synthesize_qwen_clone(parent_segments, folder, env.get("DASHSCOPE_API_KEY", ""),
+                          model, voice, args.speech_rate,
+                          volume=args.qwen_volume, pitch=args.qwen_pitch,
+                          reference_audio=reference_audio,
+                          reference_text_path=reference_text_path,
+                          speech_texts=speech_texts)
     narration = concat_audio(parent_segments, folder)
     segments = expand_narration_visual_shots(parent_segments)
     data["tts_block_count"] = len(parent_segments)
     data["visual_shot_count"] = len(segments)
     allocator = allocate_visual_all(segments, source_clips, usable_end, folder, args.trim_head)
+    if args.hierarchical_match:
+        apply_hierarchical_takeover(segments, allocator, folder)
     timeline = build_timeline(source_clips, segments)
 
     if args.no_render:

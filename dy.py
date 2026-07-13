@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from backend import runner
+from backend.cleanup import cleanup_render_artifacts
 from backend.config_store import (
     MASK,
     load_settings,
@@ -34,6 +35,7 @@ from backend.manual_script import (
 )
 from backend.media import detect_materials
 from backend.schemas import AppSettings
+from backend.scene_map import validate_scene_map
 
 ROOT = Path(__file__).resolve().parent
 VISUAL_INDEX_FILE = "_source_visual_index.json"
@@ -102,7 +104,8 @@ def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, wo
             interval = float(existing["interval"])
     mode = "重跑" if force else "识别/续跑"
     vis = settings.visual
-    face_hint = "开" if vis.use_face_gallery and (folder / vis.face_gallery_file).exists() else "关/无库"
+    _has_gallery = (folder / vis.face_gallery_file).exists() or (folder.parent / vis.face_gallery_file).exists()
+    face_hint = "开" if vis.use_face_gallery and _has_gallery else "关/无库"
     print(f"→ 视觉{mode}（模型 {settings.api.visual_model}，并发 {workers}，抽帧 {interval or '自适应'}，"
           f"{vis.frame_width}×{vis.frame_height}，每批 {vis.batch}，人脸库 {face_hint}）…")
     result = build_source_index(
@@ -145,6 +148,44 @@ def cmd_visual(args: argparse.Namespace) -> None:
     _run_visual(settings, force=args.force, interval=args.interval, workers=args.workers)
 
 
+def cmd_shots(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    from backend.shot_index import build_shot_index
+
+    folder = Path(settings.material_folder)
+    print(f"→ CPU 镜头检测：{folder}（阈值 {args.threshold:g}）…", flush=True)
+    result = build_shot_index(folder, threshold=args.threshold, force=args.force)
+    durations = sorted(float(item["duration"]) for item in result.get("shots", []))
+    median = durations[len(durations) // 2] if durations else 0.0
+    print(f"镜头索引完成：{result.get('shot_count', 0)} 镜头，中位时长 {median:.2f}s"
+          f" → {folder / '_source_shot_index.json'}")
+
+
+def cmd_events(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    from backend.event_index import build_event_index
+
+    folder = Path(settings.material_folder)
+    result = build_event_index(folder, force=args.force)
+    durations = sorted(float(item["duration"]) for item in result.get("events", []))
+    median = durations[len(durations) // 2] if durations else 0.0
+    print(f"事件索引完成：{result.get('event_count', 0)} 个事件块，中位时长 {median:.2f}s"
+          f" → {folder / '_source_event_index.json'}")
+
+
+def cmd_shadow_match(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    from backend.hierarchical_matcher import build_shadow_report
+    folder = Path(settings.material_folder)
+    result = build_shadow_report(folder)
+    print(f"分层影子匹配完成：{len(result.get('segments', []))} 个解说分镜"
+          f" → {folder / '★ 分层影子匹配报告.json'}")
+    print(f"新旧并排对比 → {folder / '★ 新旧匹配并排对比.json'}")
+    summary = result.get("planning_summary", {})
+    print(f"接管预演：就绪 {summary.get('ready', 0)} / 未解决 {summary.get('unresolved', 0)}"
+          f" → {folder / '★ 分层接管预演报告.json'}")
+
+
 def cmd_script(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
@@ -163,6 +204,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
     folder = Path(settings.material_folder)
+
+    if not getattr(args, "no_render", False):
+        if not getattr(args, "hierarchical_match", False):
+            raise SystemExit("正式渲染只允许分层匹配管线：必须使用 --hierarchical-match")
+        try:
+            validate_scene_map(folder)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
 
     print("═══ DY 工作流 ═══")
     media = detect_materials(settings.material_folder, settings.drama.source_count)
@@ -194,12 +243,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     print("[4/4] 配音 + 剪辑 + 后处理")
     if getattr(args, "no_render", False):
         runner.render(settings, on_line=lambda line: print(f"  {line}"),
-                      concurrency=args.concurrency, no_render=True)
+                      concurrency=args.concurrency, no_render=True,
+                      hierarchical_match=args.hierarchical_match)
         report = Path(settings.material_folder) / "★ 匹配报告.json"
-        print(f"\n✔ 匹配完成（未成片）：{report}")
+        print(f"\n匹配完成（未成片）：{report}")
         return
-    output = runner.render(settings, on_line=lambda line: print(f"  {line}"), concurrency=args.concurrency)
-    print(f"\n✔ 成片完成：{output}")
+    output = runner.render(settings, on_line=lambda line: print(f"  {line}"), concurrency=args.concurrency,
+                           hierarchical_match=args.hierarchical_match)
+    print(f"\n成片完成：{output}")
+
+
+def cmd_clean(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    removed, reclaimed = cleanup_render_artifacts(Path(settings.material_folder))
+    print(f"已清理 {len(removed)} 项可重建中间产物，释放 {reclaimed / 1024 / 1024:.1f} MB")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -478,6 +535,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--workers", type=int, default=3, help="视觉识别并发批数（默认3）")
     p_run.add_argument("--concurrency", type=int, default=None, help="渲染并发（覆盖，跳过基准）")
     p_run.add_argument("--no-render", action="store_true", help="只做匹配并写匹配报告/字幕，不成片")
+    p_run.add_argument("--hierarchical-match", action="store_true",
+                       help="使用已验证的 ★ 分层接管预演报告 覆盖正式解说画面")
     p_run.set_defaults(func=cmd_run)
 
     p_detect = sub.add_parser("detect", help="检测素材（原片/字幕/文案）")
@@ -494,6 +553,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_visual.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应/复用）")
     p_visual.add_argument("--workers", type=int, default=3, help="并发批数（默认3）")
     p_visual.set_defaults(func=cmd_visual)
+
+    p_shots = sub.add_parser("shots", help="CPU 镜头边界检测，建立多关键时间点镜头索引")
+    p_shots.add_argument("--folder")
+    p_shots.add_argument("--threshold", type=float, default=8.0, help="转场阈值 0-100（默认8）")
+    p_shots.add_argument("--force", action="store_true", help="忽略缓存强制重建")
+    p_shots.set_defaults(func=cmd_shots)
+
+    p_events = sub.add_parser("events", help="把物理镜头合并为大场景内的短事件块")
+    p_events.add_argument("--folder")
+    p_events.add_argument("--force", action="store_true")
+    p_events.set_defaults(func=cmd_events)
+
+    p_shadow = sub.add_parser("shadow-match", help="分层影子匹配；不修改正式成片时间线")
+    p_shadow.add_argument("--folder")
+    p_shadow.set_defaults(func=cmd_shadow_match)
+
+    p_clean = sub.add_parser("clean", help="清理旧裁切片、旧配音、渲染临时文件；保留原片/场景地图/索引/成片")
+    p_clean.add_argument("--folder")
+    p_clean.set_defaults(func=cmd_clean)
 
     p_script = sub.add_parser("script", help="生成脚本表（对齐字幕/文案）")
     p_script.add_argument("--folder")

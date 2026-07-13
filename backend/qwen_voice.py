@@ -16,15 +16,11 @@ DEFAULT_QWEN_CLONE_MODEL = "qwen3-tts-vc-2026-01-22"
 DEFAULT_QWEN_REFERENCE_AUDIO = r"D:\BaiduSyncdisk\18 艾伦全自动解说\克隆音色\yatou3.wav"
 DEFAULT_QWEN_REFERENCE_TEXT_PATH = r"D:\BaiduSyncdisk\18 艾伦全自动解说\克隆音色\yatou1参考文字.txt"
 DEFAULT_DASHSCOPE_HTTP_BASE = "https://dashscope.aliyuncs.com/api/v1"
-DEFAULT_DASHSCOPE_WS_BASE = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 
 def is_qwen_realtime_model(model: str) -> bool:
     return "realtime" in (model or "").lower()
 
-
-def is_cosyvoice_model(model: str) -> bool:
-    return (model or "").strip().lower().startswith("cosyvoice")
 
 
 def dashscope_http_base() -> str:
@@ -35,14 +31,6 @@ def dashscope_http_base() -> str:
     )
     return value.strip().rstrip("/")
 
-
-def dashscope_ws_base() -> str:
-    value = (
-        os.environ.get("DABAOAI_DASHSCOPE_BASE_WEBSOCKET_API_URL")
-        or os.environ.get("DASHSCOPE_BASE_WEBSOCKET_API_URL")
-        or DEFAULT_DASHSCOPE_WS_BASE
-    )
-    return value.strip().rstrip("/")
 
 
 def dashscope_customization_url() -> str:
@@ -94,10 +82,6 @@ def _preferred_name(path: Path) -> str:
     name = re.sub(r"_+", "_", name).strip("_")
     return (name or "dabao")[:16]
 
-
-def _is_http_url(value: str) -> bool:
-    raw = (value or "").strip().strip('"')
-    return raw.startswith("http://") or raw.startswith("https://")
 
 
 def qwen_reference_signature(model: str, audio_path: str, reference_text: str) -> str:
@@ -156,53 +140,6 @@ def create_qwen_clone_voice(api_key: str, model: str, audio_path: str) -> str:
         raise RuntimeError(f"解析百炼 Qwen 克隆音色响应失败：{data}") from exc
 
 
-def create_cosyvoice_clone_voice(api_key: str, model: str, audio_url: str) -> str:
-    url = (audio_url or "").strip().strip('"')
-    if not _is_http_url(url):
-        raise ValueError(
-            "CosyVoice 克隆音色需要填写公网可访问的参考音频 URL；"
-            "本机音频路径请使用 qwen3-tts-vc-2026-01-22。"
-        )
-
-    payload = {
-        "model": "voice-enrollment",
-        "input": {
-            "action": "create_voice",
-            "target_model": model,
-            "prefix": "dabao",
-            "url": url,
-        },
-    }
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        dashscope_customization_url(),
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            data = json.loads(response.read().decode("utf-8", errors="replace"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[-1200:]
-        raise RuntimeError(f"创建百炼 CosyVoice 克隆音色失败：{exc.code} {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"创建百炼 CosyVoice 克隆音色失败：{exc}") from exc
-
-    try:
-        return str(data["output"].get("voice_id") or data["output"].get("voice")).strip()
-    except (KeyError, TypeError) as exc:
-        raise RuntimeError(f"解析百炼 CosyVoice 克隆音色响应失败：{data}") from exc
-
-
-def create_bailian_clone_voice(api_key: str, model: str, reference_audio: str) -> str:
-    if is_cosyvoice_model(model):
-        return create_cosyvoice_clone_voice(api_key, model, reference_audio)
-    return create_qwen_clone_voice(api_key, model, reference_audio)
-
 
 def ensure_qwen_clone_voice(
     api_key: str,
@@ -236,41 +173,6 @@ def ensure_qwen_clone_voice(
     _save_profile(profile_file, profile)
     return voice_id, True, profile
 
-
-def ensure_bailian_clone_voice(
-    api_key: str,
-    model: str,
-    current_voice_id: str,
-    reference_audio: str,
-    reference_text_path: str,
-    profile_file: Path,
-) -> tuple[str, bool, dict]:
-    model = (model or DEFAULT_QWEN_CLONE_MODEL).strip()
-    reference_text = read_reference_text(reference_text_path)
-    signature = qwen_reference_signature(model, reference_audio, reference_text)
-    profile = _load_profile(profile_file)
-    if (
-        profile.get("voice")
-        and profile.get("target_model") == model
-        and profile.get("reference_signature") == signature
-    ):
-        return str(profile["voice"]), False, profile
-    if current_voice_id and profile.get("target_model") == model and profile.get("reference_signature") == signature:
-        return current_voice_id, False, profile
-
-    voice_id = create_bailian_clone_voice(api_key, model, reference_audio)
-    profile = {
-        "voice": voice_id,
-        "target_model": model,
-        "model_family": "cosyvoice" if is_cosyvoice_model(model) else "qwen",
-        "reference_audio": reference_audio.strip().strip('"'),
-        "reference_text_path": reference_text_path,
-        "reference_text_sha1": hashlib.sha1(reference_text.encode("utf-8", errors="ignore")).hexdigest(),
-        "reference_signature": signature,
-        "created_at": int(time.time()),
-    }
-    _save_profile(profile_file, profile)
-    return voice_id, True, profile
 
 
 def synthesize_qwen_http_to_file(
@@ -312,38 +214,4 @@ def synthesize_qwen_http_to_file(
         raise RuntimeError(f"下载百炼 Qwen-TTS 音频失败：{exc}") from exc
 
 
-def synthesize_cosyvoice_to_file(
-    api_key: str,
-    model: str,
-    voice: str,
-    text: str,
-    output: Path,
-) -> None:
-    import dashscope
-    from dashscope.audio.tts_v2 import AudioFormat, SpeechSynthesizer
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    dashscope.api_key = api_key
-    dashscope.base_websocket_api_url = dashscope_ws_base()
-    synthesizer = SpeechSynthesizer(
-        model=model,
-        voice=voice,
-        format=AudioFormat.WAV_24000HZ_MONO_16BIT,
-    )
-    audio = synthesizer.call(text)
-    if not audio:
-        raise RuntimeError("百炼 CosyVoice 没有返回音频")
-    output.write_bytes(audio)
-
-
-def synthesize_bailian_http_to_file(
-    api_key: str,
-    model: str,
-    voice: str,
-    text: str,
-    output: Path,
-) -> None:
-    if is_cosyvoice_model(model):
-        synthesize_cosyvoice_to_file(api_key, model, voice, text, output)
-    else:
-        synthesize_qwen_http_to_file(api_key, model, voice, text, output)

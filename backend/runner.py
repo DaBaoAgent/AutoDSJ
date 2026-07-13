@@ -34,53 +34,21 @@ def _log(on_line: LogFn | None, message: str) -> None:
 
 
 def build_pipeline_command(settings: AppSettings, *, concurrency: int | None = None,
-                           no_render: bool = False) -> list[str]:
+                           no_render: bool = False, hierarchical_match: bool = False) -> list[str]:
     """Translate settings into the ``anchored_pipeline.py`` argv."""
     media = detect_materials(settings.material_folder, settings.drama.source_count)
     target_seconds = max(30.0, media.duration - settings.video.trim_head - settings.video.trim_tail)
     ratio = max(0.05, min(1.0, target_seconds / media.duration))
 
     voice = settings.voice
-    if voice.mode == "clone" and voice.provider == "qwen":
-        backend = "qwen-clone"
-        voice_args = [
-            "--qwen-voice", voice.clone_voice_id,
-            "--qwen-model", voice.qwen_clone_model,
-            "--qwen-reference-audio", voice.qwen_reference_audio,
-            "--qwen-reference-text-path", voice.qwen_reference_text_path,
-            "--qwen-volume", str(voice.volume),
-            "--qwen-pitch", str(voice.pitch),
-        ]
-    elif voice.mode == "clone" and voice.provider == "gpt_sovits":
-        reference = Path(voice.gpt_sovits_reference_audio)
-        engine = Path(voice.gpt_sovits_engine_path)
-        if not engine.is_dir():
-            raise RuntimeError(f"本地 GPT-SoVITS 引擎不存在：{engine}")
-        if not reference.is_file():
-            raise RuntimeError(f"GPT-SoVITS 参考音频不存在：{reference}")
-        if not voice.gpt_sovits_reference_text.strip():
-            raise RuntimeError("请填写参考音频对应文字")
-        backend = "gpt-sovits"
-        voice_args = [
-            "--gpt-sovits", str(engine), "--reference", str(reference),
-            "--prompt-text", voice.gpt_sovits_reference_text,
-            "--gpt-sovits-seed", str(voice.gpt_sovits_seed),
-            "--gpt-sovits-text-split-method", voice.gpt_sovits_text_split_method,
-            "--gpt-sovits-temperature", str(voice.gpt_sovits_temperature),
-            "--gpt-sovits-top-p", str(voice.gpt_sovits_top_p),
-            "--gpt-sovits-top-k", str(voice.gpt_sovits_top_k),
-            "--gpt-sovits-repetition-penalty", str(voice.gpt_sovits_repetition_penalty),
-        ]
-    elif voice.mode == "system":
-        backend = "qwen-clone"
-        voice_args = [
-            "--qwen-voice", voice.system_voice,
-            "--qwen-model", "qwen3-tts-flash-realtime",
-            "--qwen-volume", str(voice.volume),
-            "--qwen-pitch", str(voice.pitch),
-        ]
-    else:
-        backend, voice_args = "cosyvoice", []
+    voice_args = [
+        "--qwen-voice", voice.clone_voice_id,
+        "--qwen-model", voice.qwen_clone_model,
+        "--qwen-reference-audio", voice.qwen_reference_audio,
+        "--qwen-reference-text-path", voice.qwen_reference_text_path,
+        "--qwen-volume", str(voice.volume),
+        "--qwen-pitch", str(voice.pitch),
+    ]
 
     source_volume = max(0.0, min(1.0, float(settings.drama.source_play_volume) / 100.0))
     narration_source_volume = max(0.0, min(1.0, float(settings.drama.narration_source_volume) / 100.0))
@@ -90,7 +58,6 @@ def build_pipeline_command(settings: AppSettings, *, concurrency: int | None = N
         settings.material_folder,
         "--ratio", f"{ratio:.8f}",
         "--target-seconds", f"{target_seconds:.3f}",
-        "--tts-backend", backend,
         "--speech-rate", str(voice.speech_rate),
         "--trim-head", str(settings.video.trim_head),
         "--trim-tail", str(settings.video.trim_tail),
@@ -102,11 +69,11 @@ def build_pipeline_command(settings: AppSettings, *, concurrency: int | None = N
             "--source-volume", f"{source_volume:.4f}",
             "--narration-source-volume", f"{narration_source_volume:.4f}",
         ]
-    if voice.mode == "clone" and voice.provider == "gpt_sovits" and voice.polish_audio:
-        cmd.append("--polish")
     cmd += ["--concurrency", str(concurrency if concurrency and concurrency > 0 else get_concurrency())]
     if no_render:
         cmd.append("--no-render")
+    if hierarchical_match:
+        cmd.append("--hierarchical-match")
     return cmd
 
 
@@ -141,7 +108,7 @@ def _stream_subprocess(cmd: list[str], settings: AppSettings, on_line: LogFn | N
 
 
 def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: int | None = None,
-           no_render: bool = False) -> Path | None:
+           no_render: bool = False, hierarchical_match: bool = False) -> Path | None:
     """Run the anchored pipeline + post-process into the final ``★ 成片.mp4``.
 
     When ``no_render`` is set, the pipeline only performs matching and writes
@@ -158,7 +125,8 @@ def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: 
         f"{settings.drama.narration_source_volume}% / 配音 100%",
     )
     _stream_subprocess(
-        build_pipeline_command(settings, concurrency=concurrency, no_render=no_render),
+        build_pipeline_command(settings, concurrency=concurrency, no_render=no_render,
+                               hierarchical_match=hierarchical_match),
         settings, on_line,
     )
 

@@ -1,0 +1,16 @@
+{
+  "episode": 5,
+  "description": "第5集动作级匹配黄金基准；accepted_ranges 为可接受原片秒段。",
+  "cases": [
+    {"id": "outdoor_teach", "contains": "玫瑰一边教哥哥如何追人", "subject": "黄亦玫", "action": "教哥哥追人", "accepted_ranges": [[781.0, 833.6]]},
+    {"id": "outdoor_push", "contains": "往一起推", "subject": "黄亦玫", "action": "推动哥哥靠近白晓荷", "accepted_ranges": [[817.9, 837.3]]},
+    {"id": "outdoor_fall", "contains": "山路上崴了脚", "subject": "黄亦玫", "action": "崴脚", "accepted_ranges": [[833.5, 846.9]]},
+    {"id": "outdoor_rescue", "contains": "手忙脚乱的救援", "subject": "黄振华", "action": "查看并帮助受伤的黄亦玫", "accepted_ranges": [[837.2, 867.1]]},
+    {"id": "care_fruit", "contains": "削水果", "subject": "白晓荷", "action": "拿东西或削水果", "accepted_ranges": [[1013.0, 1382.0]]},
+    {"id": "gallery_inspect", "contains": "观察了交通、灯光和货梯尺寸", "subject": "黄亦玫", "action": "考察画廊设施", "accepted_ranges": [[1391.0, 1550.0]]},
+    {"id": "office_ask", "contains": "问起玫瑰去了哪里", "subject": "庄国栋", "action": "在会议前询问黄亦玫", "accepted_ranges": [[2033.0, 2077.0]]},
+    {"id": "proposal", "contains": "带着全部诚意来到实验室", "subject": "黄振华", "action": "正式邀请白晓荷见父母", "accepted_ranges": [[2087.0, 2210.0]]},
+    {"id": "bench_confess", "contains": "相恋五年的男友分手", "subject": "白晓荷", "action": "讲述前男友", "accepted_ranges": [[2272.0, 2483.0]]},
+    {"id": "parents_argue", "contains": "即将爆发的感情风暴", "subject": "庄国栋", "action": "面对父母争吵离婚", "accepted_ranges": [[2483.0, 2659.0]]}
+  ]
+}
