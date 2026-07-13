@@ -14,6 +14,12 @@ VOICE_SCHEMA = "v1-campplus-character-voice-index"
 VOICE_INDEX_FILE = "_source_voice_index.json"
 VOICE_GALLERY_FILE = "_voice_gallery.json"
 DEFAULT_MODEL = "iic/speech_campplus_sv_zh_en_16k-common_advanced"
+VOICE_ROLE_ALIASES = {"玫瑰": "黄亦玫", "小玫": "黄亦玫", "Rosie": "黄亦玫"}
+
+
+def _canonical_role(value: object) -> str:
+    role = str(value or "").strip()
+    return VOICE_ROLE_ALIASES.get(role, role)
 
 
 def _signature(video: Path, refs: list[Path]) -> str:
@@ -75,12 +81,12 @@ def voice_event_score(index: dict, start: float, end: float, characters: list[st
         if overlap <= 0:
             continue
         speaker_seconds += overlap
-        role = str(item.get("character") or "")
+        role = _canonical_role(item.get("character"))
         if role:
             duration_by_role[role] = duration_by_role.get(role, 0.0) + overlap
             similarities[role] = max(similarities.get(role, 0.0), float(item.get("similarity") or 0))
     event_duration = max(0.1, end - start)
-    target = max((duration_by_role.get(role, 0.0) for role in characters), default=0.0)
+    target = max((duration_by_role.get(_canonical_role(role), 0.0) for role in characters), default=0.0)
     identity = min(1.0, target / max(0.1, min(event_duration, speaker_seconds))) if target else 0.0
     activity = min(1.0, speaker_seconds / event_duration)
     if characters:

@@ -14,6 +14,13 @@ class VoiceIndexTests(unittest.TestCase):
         self.assertGreater(target["total"], wrong["total"])
         self.assertGreater(target["identity"], 0.7)
 
+    def test_nickname_maps_to_canonical_voice_folder(self):
+        index = {"segments": [
+            {"start": 1, "end": 4, "character": "黄亦玫", "similarity": 0.84},
+        ]}
+        score = voice_event_score(index, 1, 4, ["玫瑰"], speaking=True)
+        self.assertGreater(score["identity"], 0.9)
+
 
 if __name__ == "__main__":
     unittest.main()
