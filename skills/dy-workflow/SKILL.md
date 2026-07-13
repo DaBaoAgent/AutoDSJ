@@ -1,0 +1,191 @@
+---
+name: dy-workflow
+description: Windows 上的 DY 电视剧/短剧全自动解说剪辑工作流。用户说“DY”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和30～60帧选择性视觉复核。
+---
+
+# DY 工作流
+
+## 唯一技能源与同步
+
+只修改 Git 仓库中的 `D:\@kaifa\DaobaoAI-DY\project\skills\dy-workflow`。不得把 Hermes 部署目录当作源文件直接迭代。每次修改后先校验并提交 Git，再运行：
+
+```powershell
+cd D:\@kaifa\DaobaoAI-DY\project
+.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --sync
+.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --check
+```
+
+Hermes 部署目录固定为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\dy-workflow`。同步工具会删除部署目录中的多余旧文件，并按每个文件 SHA-256 确认两边完全一致。
+
+项目：`D:\@kaifa\DaobaoAI-DY\project`
+
+Python：`D:\@kaifa\DaobaoAI-DY\project\.venv\Scripts\python.exe`
+
+素材根目录示例：`D:\自动剪辑\玫瑰的故事`
+
+本工作流无 WebUI、无端口，只走 `dy.py` 这一条 CLI 管线。配音只用百炼 Qwen 克隆音色。**音量硬性规范：`voice.volume=100`、`drama.source_play_volume=100`，配音与原片再分别经 `loudnorm=I=-16:TP=-1.5:LRA=11` 归一化到 -16 LUFS 等响**。不得用 120%/50% 等纯增益组合代替响度归一化。
+
+## 不可跳过的顺序
+
+### 1. 先审校文案
+
+读取目标单集目录及子目录的 `.txt/.md/.docx` 源文案，不得直接开跑。检查：
+
+- `原片：` / `解说：` 结构完整；
+- 开头冲突或悬念足够强，信息递进、因果和结尾追更钩子合理；
+- 角色名、他/她、人物关系、动作主体和字幕同音字正确；
+- 每段主要推进一个事件，只有尾句可承接下一场景。
+
+《玫瑰的故事》必须读 `references/rose-story-knowledge.md`，并查 `references/rose-story-episodes.json` 的对应集。
+
+### 2. 先建文本和物理镜头索引
+
+```powershell
+cd D:\@kaifa\DaobaoAI-DY\project
+$PY = ".\.venv\Scripts\python.exe"
+& $PY dy.py preflight --folder "<单集素材夹>"
+& $PY dy.py script --folder "<单集素材夹>"
+& $PY dy.py shots --folder "<单集素材夹>"
+```
+
+不要恢复旧的每 8～10 秒抽一帧、全片约 280 帧的 VL 扫描。先以 SRT、审校剧本和物理镜头关键图编完整场景地图；昂贵视觉只在文本缩小候选后运行。
+
+新集还没有 `★ 匹配报告.json` 时，允许一次不渲染引导：
+
+```powershell
+& $PY dy.py run --folder "<单集素材夹>" --skip-visual --no-render
+```
+
+### 3. 建完整大场景地图
+
+在正式匹配或渲染前，必须完整查看原片时间轴，写好 `<素材夹>\_scene_map.json`。原片有多少个完整大场景，`scenes` 就必须有多少个；不得只画文案提到的几个。
+
+必须满足：
+
+- `coverage_reviewed: true`；
+- `scene_count == scenes.length`；
+- `coverage_ranges` 全部被各大场景连续覆盖，无空洞；
+- 每个解说镜头只能落在唯一的父段场景计划中；
+- 一段解说默认只有一个主场景；
+- 最多允许“整段主场景 → 更短的尾句承上启下场景”；
+- 禁止三场景跳转、短前导后长跳转、候选扩窗越出指定大场景。
+
+**效率技巧**：建场景地图时用 `execute_code` 批处理——一次性读取视觉索引用 `print` 输出完整时间轴（time+people+caption），据此划分场景边界，然后写 JSON 到磁盘并立即 `from backend.scene_map import validate_scene_map` 验证，避免多轮 terminal/read_file 来回。
+
+具体 JSON 契约见 `references/hierarchical-shot-matching.md`。新集从零编写场景地图的实操
+（先跑 `run --skip-visual --no-render` 引导出 `★匹配报告.json`，据它定 `parent_scene_plans`
+的键=`tts_parent_id`、`to_shot`=各段真实分镜数；交叉剪辑剧集用「多 range 场景按剧情线分组」
+但所有 range 须划分时间轴不重叠），以及渲染后用人脸库核验成片的完整方法，见
+`references/scene-map-authoring-and-verification.md`。
+
+### 4. 建分层镜头并影子匹配
+
+```powershell
+& $PY dy.py events --folder "<单集素材夹>"
+& $PY dy.py shadow-match --folder "<单集素材夹>"
+& $PY dy.py visual --folder "<单集素材夹>" --target-frames 45
+& $PY dy.py shadow-match --folder "<单集素材夹>"
+```
+
+固定层级：`大场景 → 连续事件块 → 物理镜头 → 动作瞬间`。
+
+固定证据顺序：SRT/审校剧本 BM25 → 文本向量 → 可选 CAM++ 角色声纹 → 父段 Viterbi 全局序列 → 30～60 帧选择性视觉复核。所有证据只能在父场景内排序，不能将镜头拉到场景外。详细契约见 `references/hybrid-evidence-matching.md`。
+
+时间线固定使用两轮分配：第一轮在全部候选中选择全局未用画面；只有第一轮完全无解时，父段计划才允许第二轮复用已引用的原片对白画面。`planning_summary.strict_fresh` 应尽量等于解说镜头数，`source_reuse_fallback` 应为 0 或极小。广告区在两轮中都是绝对硬禁区，父段计划、人工 override 和复用降级均不得绕过。
+
+`shadow-match` 会生成 `_selective_visual_plan.json`。计划、候选或场景图变化时旧视觉索引自动失效；运行 `visual` 后必须再跑一次 `shadow-match`。视觉 API 运行期间可读 `_source_visual_index.json` 的 `status/message` 监控进度。
+
+有干净角色对白参考时启用 CAM++：
+
+```powershell
+uv pip install --python $PY -r requirements-audio.txt
+uv pip install --python $PY --no-deps speakerlab==0.0.6
+# <剧集根>\_voices\<角色名>\*.wav
+& $PY dy.py voices --folder "<单集素材夹>"
+```
+
+缺 `speakerlab` 或参考音频时允许字幕/剧本路径运行，但报告必须显示 `voice_index=false`，不得声称声纹已生效。
+
+必须检查：
+
+- `★ 分层影子匹配报告.json`；
+- `★ 新旧匹配并排对比.json`；
+- `★ 分层接管预演报告.json`。
+- `_subtitle_event_index.json`、`_selective_visual_plan.json`；有声纹时还要 `_source_voice_index.json`。
+
+只有 `safe_to_render=true` 且 `unresolved=0` 才能渲染。地图、文案、分镜或配音变化后必须重跑 `shadow-match`；不得手改报告绕过哈希和时间线校验。
+
+### 5. 先预跑，再成片
+
+```powershell
+& $PY dy.py run --folder "<单集素材夹>" --skip-visual --no-render --hierarchical-match
+& $PY dy.py run --folder "<单集素材夹>" --skip-visual --hierarchical-match
+```
+
+正式渲染不带 `--hierarchical-match`、缺场景地图、地图不完整或预演哈希失效时，必须停止，不允许降级到旧匹配方法。
+
+## 人脸库
+
+换新剧或人物容易混淆时，在剧集根目录放 `_faces/<角色>/*.jpg`，每个主要角色 3–5 张清晰正脸，再运行：
+
+```powershell
+& $PY dy.py faces build --folder "<单集素材夹>"
+```
+
+## 成片交付
+
+验收 `★ 成片.mp4`后：
+
+1. 运行 `scripts/audit_pronouns.py "<源文案>"` 审核他/她；有错先改源文案。
+2. 根据实际成片生成 `★ 发布信息.txt`：爆款标题、5 个标签、剧情简介。
+3. 运行 `scripts/make_jianying_srt_txt.py "<源文案>"` 生成 `★ 剪映字幕导入.txt`。
+4. 向用户报告成片、字幕、匹配报告和发布信息路径。
+
+用户要求保留旧成片时，先复制到单集子目录，再渲染；不要在主目录放多个可被误识别的源视频。
+
+## 安全清理
+
+只在成片存在且验收后执行：
+
+```powershell
+& $PY dy.py clean --folder "<单集素材夹>"
+```
+
+该命令只删旧裁切片、拼接视频、TTS/配音中间音频、诊断帧、渲染日志和临时清单。必须保留原片、字幕、源文案、`_scene_map.json`、视觉/人脸/字幕/镜头/事件/帧向量索引、影子报告和最终交付物。
+
+## 快速排错
+
+- 整段乱跳：先查 `_scene_map.json` 和 `parent_scene_plans`，不要扩大时间窗。
+- 人物错：检查父场景是否选错，再补人脸参考照。
+- 动作错：检查事件块、物理镜头的多关键帧和 SRT，不得跳出父场景找高分帧。
+- 改了文案：重跑脚本表与 `shadow-match`。若新的 `_selective_visual_plan.json` 使视觉索引过期，再跑默认 `visual`（仍只有30～60帧），不要恢复密集全片扫描。
+- 匹配慢：先检查 `_event_text_embeddings.json` 和 `_query_text_embeddings.json` 是否存在；内容不变时第六集93镜实测重匹配约7秒。
+- 多集任务：串行渲染，不要同时吃满笔记本 CPU/内存/磁盘。
+- **场景地图覆盖空洞**：`validate_scene_map` 报 `覆盖存在空洞` 时，常见原因：(a) `coverage_ranges` 包含了没有视觉帧的广告区间——把广告区从 `coverage_ranges` 移除，或拆成多段 `[[150, 978], [1001, 2668]]`；(b) 某场景 `ranges` 结尾与下个场景开头有间隔——逐场景检查 `scenes[].ranges` 的连续性，确保相邻场景首尾相接（允许广告区打断）。`excluded_ranges` 不影响覆盖校验，只影响匹配，广告区必须从 `coverage_ranges` 移出而非只写在 `excluded_ranges`。
+- **场景地图写入顺序**：先用 Python 写 `_scene_map.json` 到磁盘，再 `validate_scene_map` 验证。`validate_scene_map` 从磁盘读取场景地图，不是从内存。先写后验，不要反过来。
+
+三个「别慌」信号（都不是故障，详见 `references/scene-map-authoring-and-verification.md`）：
+
+- 渲染日志刷 `[场景锁定] 行N-镜M → 「场景」` 且与 `parent_scene_plans` 不符——那是旧分配器过渡噪声，随后的 `分层匹配正式接管：N 个解说分镜` 会整段覆盖，以接管后置信度全 `H` 的 `★匹配报告.json` 为准。
+- 接管后必须分别检查解说复用和原片明确复引。解说画面与任何已用片段重叠都应先消除；只有文案明确重复引用同一句原片对白、且必须保持口型与原声时，才允许记录为必要例外。
+- 「独立爆款版」短文案出片仅 2-3 分钟——正确。成片时长 = Σ解说配音 + Σ原片对白，由文案长度决定；引导日志「解说目标约2490s(90%)」只是按原片长度的默认假设，不代表漏渲染。
+
+- **广告禁区误封**：`dy.py run` 报 `RuntimeError: 素材区间命中广告禁区` 时，先查 `_source_ad_intervals.json`。视觉 API 描述中的"贴满小广告的墙""贴有广告的柱子"等场景陈设词会被 `backend/ad_filter.py` 关键词匹配为广告信号，把正常剧情封掉。修复：用 Python 把 `_source_visual_index.json` 中 `caption/props/scene/action/people` 字段里的 `广告` 替换为 `招贴` 或 `告示`，再删掉 `_source_ad_intervals.json` 让它重新生成。注意 `props` 字段也常含"广告"（如"左侧贴有广告的柱子""小广告、窗台盆栽"），必须一并处理，不能只修 `caption`：
+  ```powershell
+  cd D:\@kaifa\DaobaoAI-DY\project
+  & $PY -c "
+  import json; from pathlib import Path
+  p = Path(r'<单集素材夹>\_source_visual_index.json')
+  d = json.loads(p.read_text('utf-8'))
+  for f in d.get('frames', []):
+      for k in ('caption','props','scene','action'):
+          if isinstance(f.get(k), str) and '广告' in f[k]:
+              f[k] = f[k].replace('广告','告示').replace('小告示','招贴')
+  p.write_text(json.dumps(d, ensure_ascii=False, indent=2), 'utf-8')
+  print('done')
+  "
+  rm "<单集素材夹>\_source_ad_intervals.json"
+  ```
+  修完重跑 `dy.py run --skip-visual --no-render`。注意：仅修正视觉层不会丢失信息——广告区判定仍靠字幕信号（如"唯品会""搜玫瑰"等）正常工作。详细案例见 `references/ad-filter-false-positive-fix.md`。
+
+项目的完整命令与数据结构以 `D:\@kaifa\DaobaoAI-DY\project\README.md` 为准。

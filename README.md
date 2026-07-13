@@ -216,6 +216,17 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 
 配音和原片的纯增益固定为 100%，渲染时再分别通过 `loudnorm=I=-16:TP=-1.5:LRA=11` 统一听感响度；解说覆盖处原片声默认静音。不要用 120%/50% 的增益组合代替响度归一化。
 
+## DY 技能同步
+
+Git 中的唯一技能源是 `skills/dy-workflow`，Hermes 目录只是部署副本。所有规则迭代必须先修改仓库版本、测试并提交，再单向同步：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --sync
+.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --check
+```
+
+默认目标为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\dy-workflow`。`--check` 会比较相对路径和 SHA-256；缺失、多余或内容不同都会返回非零退出码，避免 Codex 与 Hermes 使用不同版本。
+
 ## 清理规则
 
 完成渲染并验收后，可清理可重建产物：
