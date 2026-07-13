@@ -122,14 +122,17 @@ def build_voice_index(folder: Path, *, force: bool = False, threshold: float = 0
         if cached.get("signature") == signature and cached.get("status") == "complete":
             return cached
     try:
+        import numpy as np
         import torch
-        import torchaudio
+        from scipy.io import wavfile
+        from scipy.signal import resample_poly
         from speakerlab.models.campplus.DTDNN import CAMPPlus
         from speakerlab.process.processor import FBank
         from speakerlab.utils.utils import download_model_from_modelscope
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
-            "CAM++ 声纹依赖未安装。请安装 requirements-audio.txt，并把参考音频放入 "
+            "CAM++ 声纹依赖未安装。请用 uv 安装 requirements-audio.txt，再用 --no-deps "
+            "安装 speakerlab==0.0.6，并把参考音频放入 "
             "<剧集根>/_voices/<角色名>/*.wav"
         ) from exc
 
@@ -146,12 +149,18 @@ def build_voice_index(folder: Path, *, force: bool = False, threshold: float = 0
     feature_extractor = FBank(80, sample_rate=16000, mean_nor=True)
 
     def load_audio(path: Path) -> torch.Tensor:
-        audio, sample_rate = torchaudio.load(str(path))
-        if audio.shape[0] > 1:
-            audio = audio.mean(dim=0, keepdim=True)
+        sample_rate, values = wavfile.read(str(path))
+        if np.issubdtype(values.dtype, np.integer):
+            scale = float(max(abs(np.iinfo(values.dtype).min), np.iinfo(values.dtype).max))
+            values = values.astype(np.float32) / scale
+        else:
+            values = values.astype(np.float32)
+        if values.ndim > 1:
+            values = values.mean(axis=1)
         if sample_rate != 16000:
-            audio = torchaudio.functional.resample(audio, sample_rate, 16000)
-        return audio
+            divisor = math.gcd(int(sample_rate), 16000)
+            values = resample_poly(values, 16000 // divisor, int(sample_rate) // divisor).astype(np.float32)
+        return torch.from_numpy(values).unsqueeze(0)
 
     source_audio = load_audio(wav)
 

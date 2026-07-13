@@ -155,7 +155,8 @@ cd D:\@kaifa\DaobaoAI-DY\project
 可选声纹启用：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-audio.txt
+uv pip install --python .\.venv\Scripts\python.exe -r requirements-audio.txt
+uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 # 放置 <剧集根>\_voices\<角色名>\*.wav（每人至少一段干净对白）
 .\.venv\Scripts\python.exe dy.py voices --folder "D:\自动剪辑\某剧\第N集"
 ```

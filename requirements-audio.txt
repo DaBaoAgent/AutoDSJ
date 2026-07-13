@@ -4,6 +4,5 @@ torchaudio>=2.2,<3
 numpy>=1.26,<2
 scipy>=1.11,<2
 modelscope>=1.28,<2
-# SpeakerLab is used only for CAM++ embedding; the workflow deliberately uses
-# SRT speech intervals instead of its heavy full-episode diarization path.
-speakerlab>=0.0.6,<0.1
+# Install SpeakerLab separately without its training/visualization dependency
+# tree: `uv pip install --python .venv/Scripts/python.exe --no-deps speakerlab==0.0.6`.
