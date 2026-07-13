@@ -776,9 +776,13 @@ def apply_hierarchical_takeover(segments: list[NarrationSegment], allocator: Vis
         start, end = float(item["clip_start"]), float(item["clip_end"])
         if abs((end - start) - float(segment.audio_duration)) > 0.01:
             raise RuntimeError(f"接管预演与当前配音时长不一致：分镜 {segment.segment_id}")
-        is_reviewed_reuse = (item.get("planned_event_id") == "manual_override"
-                             or ":plan" in str(item.get("continuity_group_id") or ""))
-        unavailable = narration_used if is_reviewed_reuse else [*allocator.blocked, *new_used]
+        # Ads are absolute hard blocks. A reviewed plan may reuse quoted source
+        # footage only when the shadow planner explicitly recorded a second-pass
+        # fallback; the scene-plan label itself never grants a bypass.
+        reuse_mode = str(item.get("planned_reuse_mode") or "strict")
+        unavailable = ([*allocator.blocked, *narration_used]
+                       if reuse_mode == "source_fallback"
+                       else [*allocator.blocked, *new_used])
         if any(not (end + allocator.guard <= left or start >= right + allocator.guard)
                for left, right, _ in unavailable):
             raise RuntimeError(f"接管区间冲突或命中广告：分镜 {segment.segment_id}")
@@ -1233,13 +1237,13 @@ def main() -> None:
     parser.add_argument("--qwen-model", default="")
     parser.add_argument("--qwen-reference-audio", default=DEFAULT_QWEN_REFERENCE_AUDIO)
     parser.add_argument("--qwen-reference-text-path", default=DEFAULT_QWEN_REFERENCE_TEXT_PATH)
-    parser.add_argument("--qwen-volume", type=int, default=120)
+    parser.add_argument("--qwen-volume", type=int, default=100)
     parser.add_argument("--qwen-pitch", type=float, default=1.0)
     parser.add_argument("--speech-rate", type=float, default=1.0)
     parser.add_argument("--trim-head", type=float, default=6.0)
     parser.add_argument("--trim-tail", type=float, default=15.0)
     parser.add_argument("--include-source-audio", action="store_true")
-    parser.add_argument("--source-volume", type=float, default=0.5)
+    parser.add_argument("--source-volume", type=float, default=1.0)
     parser.add_argument("--narration-source-volume", type=float, default=0.0)
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--no-render", action="store_true",

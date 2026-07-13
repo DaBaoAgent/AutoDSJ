@@ -169,7 +169,9 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 - `★ 新旧匹配并排对比.json`
 - `★ 分层接管预演报告.json`
 
-必须确认 `unresolved=0`，且没有越界候选、缺失父段计划或第三场景跳转。
+必须确认 `unresolved=0`，且没有越界候选、缺失父段计划或第三场景跳转。时间线分配固定先尝试全局未用画面；只有父段内所有新候选都无法容纳配音时，才允许复用已引用的原片对白画面，并在 `planning_summary.source_reuse_fallback` 中计数。广告区是绝对硬禁区，人工覆盖、父段计划和复用降级均不得绕过。
+
+广告索引同时使用字幕商业话术和选择性视觉中的品牌/产品展示信号。审核出的广告必须从 `_scene_map.json.coverage_ranges` 与对应场景 `ranges` 中移除，并写入 `excluded_ranges`；修改广告区或场景图后必须重跑 `shadow-match`。
 
 ### 5. 先预跑，再正式渲染
 
@@ -189,13 +191,13 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
   "voice": {
     "mode": "clone",
     "provider": "qwen",
-    "volume": 120,
+    "volume": 100,
     "speech_rate": 1.0,
     "pitch": 1.0
   },
   "drama": {
     "keep_source_audio": true,
-    "source_play_volume": 50,
+    "source_play_volume": 100,
     "narration_source_volume": 0
   },
   "visual": {
@@ -212,7 +214,7 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 }
 ```
 
-101%–200% 的配音音量由本地增益和限幅器实现，避免直接削波；100% 为原样输出。DY 成片固定默认配音 120%、原片对白 50%；解说覆盖处原片声默认静音。
+配音和原片的纯增益固定为 100%，渲染时再分别通过 `loudnorm=I=-16:TP=-1.5:LRA=11` 统一听感响度；解说覆盖处原片声默认静音。不要用 120%/50% 的增益组合代替响度归一化。
 
 ## 清理规则
 

@@ -26,8 +26,8 @@ class VoiceSettings(BaseModel):
     qwen_reference_text_path: str = DEFAULT_QWEN_REFERENCE_TEXT_PATH
     speech_rate: float = Field(1.0, ge=0.7, le=1.5)
     # 0-100 uses the provider level; 101-200 adds local post-gain with a limiter.
-    # 120 = 原样基础上增加本地增益并限幅，作为 DY 成片的固定默认值。
-    volume: int = Field(120, ge=0, le=200)
+    # Pure gain stays at unity; render_video normalizes every source to -16 LUFS.
+    volume: int = Field(100, ge=0, le=200)
     pitch: float = Field(1.0, ge=0.5, le=2.0)
 
 
@@ -44,8 +44,8 @@ class VideoSettings(BaseModel):
 class DramaSettings(BaseModel):
     source_count: int = Field(1, ge=1, le=10)
     keep_source_audio: bool = True
-    # 原片对白保留一半音量，避免压住 120% 的解说配音。
-    source_play_volume: int = Field(50, ge=0, le=100)
+    # Keep unity after loudness normalization so source and narration sound equal.
+    source_play_volume: int = Field(100, ge=0, le=100)
     narration_source_volume: int = Field(0, ge=0, le=100)
 
 

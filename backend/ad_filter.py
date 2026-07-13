@@ -10,7 +10,7 @@ AD_INDEX_FILE = "_source_ad_intervals.json"
 
 _VISUAL_AD_MARKERS = (
     "广告", "品牌植入", "广告宣传", "广告牌", "商业宣传", "赞助", "冠名",
-    "二维码", "logo展示", "产品展示",
+    "二维码", "logo展示", "产品展示", "展示产品", "产品细节",
 )
 
 _SUBTITLE_AD_MARKERS = (
@@ -71,7 +71,10 @@ def _visual_signals(folder: Path) -> list[dict]:
             interval = max(2.0, float(record.get("interval", 10.0) or 10.0))
         except (TypeError, ValueError):
             continue
-        padding = interval / 2.0 + 2.0
+        # The frame represents its sampling cell. Extra padding used to swallow
+        # legitimate drama immediately before a bumper; half an interval covers
+        # the cell and adjacent subtitle signals extend the full commercial.
+        padding = interval / 2.0
         signals.append({
             "start": max(0.0, timestamp - padding),
             "end": timestamp + padding,

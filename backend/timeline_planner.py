@@ -28,8 +28,16 @@ def fit_window(point_start: float, point_end: float, need: float, event_start: f
     return None
 
 
-def plan_timeline(segments: list[dict], blocked: list[tuple[float, float]]) -> dict:
-    used = list(blocked)
+def plan_timeline(segments: list[dict], blocked: list[tuple[float, float]], *,
+                  hard_blocked: list[tuple[float, float]] | None = None) -> dict:
+    """Allocate narration clips with strict global de-duplication first.
+
+    ``blocked`` contains already quoted source material. Reviewed scene plans may
+    reuse it only as a second-pass fallback. ``hard_blocked`` contains ads and
+    can never be bypassed, including by manual overrides.
+    """
+    hard = list(hard_blocked or [])
+    used = [*blocked, *hard]
     narration_used: list[tuple[float, float]] = []
     previous_by_parent: dict[object, dict] = {}
     failures = []
@@ -58,25 +66,36 @@ def plan_timeline(segments: list[dict], blocked: list[tuple[float, float]]) -> d
             ranked.append((score, candidate))
         ranked.sort(key=lambda item: item[0], reverse=True)
         chosen = None
+        reuse_mode = "strict"
         need = float(segment.get("audio_duration") or 0)
+        # First pass: try every ranked candidate against all material already
+        # used anywhere in the edit. A lower-ranked fresh shot is preferable to
+        # a high-ranked repeated shot.
         for _, candidate in ranked:
-            # Reviewed scene overrides may intentionally reuse a source moment
-            # already present as dialogue elsewhere in the edit.  It is the
-            # only case allowed to bypass the anti-repeat material guard.
-            if candidate.get("allow_reuse"):
-                unavailable = narration_used
-            elif candidate.get("allow_source_reuse"):
-                unavailable = narration_used
-            else:
-                unavailable = used
             fitted = fit_window(float(candidate["shot_start"]), float(candidate["shot_end"]), need,
-                                float(candidate["event_start"]), float(candidate["event_end"]), unavailable)
+                                float(candidate["event_start"]), float(candidate["event_end"]), used)
             if fitted:
                 chosen = {**candidate, "start": fitted[0], "end": fitted[1]}
                 break
+        # Second pass: a reviewed scene/manual plan may reuse quoted source
+        # footage only when no fresh candidate fits. Ads and narration footage
+        # remain unavailable in all cases.
+        if chosen is None:
+            fallback_unavailable = [*hard, *narration_used]
+            for _, candidate in ranked:
+                if not (candidate.get("allow_reuse") or candidate.get("allow_source_reuse")):
+                    continue
+                fitted = fit_window(float(candidate["shot_start"]), float(candidate["shot_end"]), need,
+                                    float(candidate["event_start"]), float(candidate["event_end"]),
+                                    fallback_unavailable)
+                if fitted:
+                    chosen = {**candidate, "start": fitted[0], "end": fitted[1]}
+                    reuse_mode = "source_fallback"
+                    break
         if chosen:
             segment["planned_clip_start"], segment["planned_clip_end"] = chosen["start"], chosen["end"]
             segment["planned_event_id"] = chosen["event_id"]
+            segment["planned_reuse_mode"] = reuse_mode
             segment["planning_status"] = "ready"
             used.append((chosen["start"], chosen["end"]))
             narration_used.append((chosen["start"], chosen["end"]))
@@ -85,4 +104,7 @@ def plan_timeline(segments: list[dict], blocked: list[tuple[float, float]]) -> d
             segment["planning_status"] = "unresolved"
             failures.append(segment.get("segment_id"))
     return {"ready": len(segments) - len(failures), "unresolved": len(failures),
-            "unresolved_segment_ids": failures}
+            "unresolved_segment_ids": failures,
+            "strict_fresh": sum(item.get("planned_reuse_mode") == "strict" for item in segments),
+            "source_reuse_fallback": sum(item.get("planned_reuse_mode") == "source_fallback"
+                                         for item in segments)}

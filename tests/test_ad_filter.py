@@ -67,6 +67,26 @@ class AdFilterTests(unittest.TestCase):
 
         self.assertFalse(start < 20.0 and end > 10.0)
 
+    def test_product_display_visual_is_an_ad_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            (folder / "_source_visual_index.json").write_text(
+                json.dumps({"frames": [{
+                    "time": 1488.0,
+                    "interval": 8.0,
+                    "caption": "一只手拿着易拉罐，展示产品细节",
+                    "props": "品牌饮料易拉罐",
+                }]}, ensure_ascii=False),
+                "utf-8",
+            )
+
+            intervals = detect_ad_intervals(folder, write_index=False)
+
+            self.assertEqual(len(intervals), 1)
+            self.assertEqual(intervals[0]["start"], 1484.0)
+            self.assertEqual(intervals[0]["end"], 1492.0)
+            self.assertIn("vision", intervals[0]["sources"])
+
 
 if __name__ == "__main__":
     unittest.main()

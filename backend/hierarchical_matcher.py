@@ -330,14 +330,16 @@ def build_shadow_report(folder: Path, matching: object | None = None,
                     "shot_end": manual_end, "allow_reuse": True})
         result["_planning_candidates"] = planning
         output_segments.append(result)
-    blocked = [(float(item.get("clip_start", 0)), float(item.get("clip_end", 0)))
-               for item in old.get("segments", []) if item.get("row_type") == "source_clip"]
+    source_blocked = [(float(item.get("clip_start", 0)), float(item.get("clip_end", 0)))
+                      for item in old.get("segments", []) if item.get("row_type") == "source_clip"]
+    ad_blocked: list[tuple[float, float]] = []
     ad_path = folder / "_source_ad_intervals.json"
     if ad_path.exists():
-        blocked.extend((float(item["start"]), float(item["end"]))
-                       for item in _load(ad_path).get("intervals", _load(ad_path) if isinstance(_load(ad_path), list) else []))
+        ad_payload = _load(ad_path)
+        ad_items = ad_payload.get("intervals", []) if isinstance(ad_payload, dict) else ad_payload
+        ad_blocked.extend((float(item["start"]), float(item["end"])) for item in ad_items)
     sequence_summary = decode_parent_sequences(output_segments)
-    planning_summary = plan_timeline(output_segments, blocked)
+    planning_summary = plan_timeline(output_segments, source_blocked, hard_blocked=ad_blocked)
     planning_summary["sequence_decoder"] = sequence_summary
     visual_plan = build_selective_visual_plan(
         folder,
