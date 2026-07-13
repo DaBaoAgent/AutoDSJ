@@ -25,7 +25,6 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from backend import runner
-from backend.cleanup import cleanup_render_artifacts
 from backend.config_store import (
     MASK,
     load_settings,
@@ -43,6 +42,7 @@ from backend.manual_script import (
 from backend.media import detect_materials
 from backend.schemas import AppSettings
 from backend.scene_map import validate_scene_map
+from backend.workspace import artifact_path, organize_episode_folder, restore_episode_workspace
 
 ROOT = Path(__file__).resolve().parent
 VISUAL_INDEX_FILE = "_source_visual_index.json"
@@ -59,6 +59,7 @@ def _resolve_settings(folder: str | None) -> AppSettings:
         raise SystemExit("未设置素材文件夹。请用 `dy set --folder <路径>` 或 `dy run --folder <路径>`。")
     if not Path(settings.material_folder).is_dir():
         raise SystemExit(f"素材文件夹不存在：{settings.material_folder}")
+    restore_episode_workspace(Path(settings.material_folder))
     return settings
 
 
@@ -76,7 +77,7 @@ def _dashscope_key(settings: AppSettings) -> str:
 
 
 def _visual_stats(folder: Path) -> dict:
-    path = folder / VISUAL_INDEX_FILE
+    path = artifact_path(folder, VISUAL_INDEX_FILE)
     if not path.exists():
         return {"exists": False, "ready": False, "frame_count": 0, "success": 0, "failed": 0, "interval": 0.0}
     try:
@@ -89,7 +90,7 @@ def _visual_stats(folder: Path) -> dict:
     status = str(payload.get("status") or "")
     selective_schema = payload.get("visual_schema") == "v3-selective-face-720p"
     plan_matches = True
-    plan_path = folder / "_selective_visual_plan.json"
+    plan_path = artifact_path(folder, "_selective_visual_plan.json")
     if plan_path.exists():
         try:
             plan = json.loads(plan_path.read_text("utf-8"))
@@ -261,7 +262,7 @@ def cmd_deliver(args: argparse.Namespace) -> None:
     print("发布交付完成：")
     print(f"  发布信息：{report['publish']['file']}")
     print(f"  剪映字幕：{report['jianying']['file']}（{report['jianying']['line_count']} 行）")
-    print(f"  交付清单：{Path(settings.material_folder) / '★ 交付清单.json'}")
+    print(f"  交付清单：{report['delivery_report_file']}")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -322,8 +323,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 def cmd_clean(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
-    removed, reclaimed = cleanup_render_artifacts(Path(settings.material_folder))
-    print(f"已清理 {len(removed)} 项可重建中间产物，释放 {reclaimed / 1024 / 1024:.1f} MB")
+    moved = organize_episode_folder(Path(settings.material_folder))
+    print(f"已把 {len(moved)} 项工作文件归档到：{Path(settings.material_folder) / '_DY工作文件'}")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -351,7 +352,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     else:
         print("  视觉索引 ✗ 未就绪")
     # 人脸库（认「谁」的主力）；全集共享时在剧集根
-    gallery_path = folder / settings.visual.face_gallery_file
+    gallery_path = artifact_path(folder, settings.visual.face_gallery_file)
     if not gallery_path.exists() and (folder.parent / settings.visual.face_gallery_file).exists():
         gallery_path = folder.parent / settings.visual.face_gallery_file
     if gallery_path.exists():
@@ -363,7 +364,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             print("  人脸库 ⚠ 存在但损坏（`dy faces build` 重建）")
     else:
         print("  人脸库 · 未建（`dy faces build`，缺则退回纯 VL 描述）")
-    voice_path = folder / "_source_voice_index.json"
+    voice_path = artifact_path(folder, "_source_voice_index.json")
     if voice_path.exists():
         try:
             voice = json.loads(voice_path.read_text("utf-8"))
@@ -373,7 +374,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             print("  CAM++声纹 ⚠ 索引损坏（`dy voices --force` 重建）")
     else:
         print("  CAM++声纹 · 未建（可选；`dy voices`）")
-    print(f"  脚本表 {'✓' if (folder / SCRIPT_TABLE_FILE).exists() else '✗ 未生成'}")
+    print(f"  脚本表 {'✓' if artifact_path(folder, SCRIPT_TABLE_FILE).exists() else '✗ 未生成'}")
     print(f"  成片 {'✓ ' + str(folder / '★ 成片.mp4') if (folder / '★ 成片.mp4').exists() else '✗ 未生成'}")
 
 

@@ -15,6 +15,7 @@ from .manual_script import (
 from .media_tools import ffprobe
 from .schemas import AppSettings
 from .vision_api import parse_srt
+from .workspace import WORKSPACE_NAME, organize_episode_folder
 
 
 VIDEO_FILE = "★ 成片.mp4"
@@ -196,5 +197,13 @@ def run_delivery(settings: AppSettings, output: Path | None = None) -> dict:
         "matching_report": str(match_path),
         "pronoun_review_line_count": len(pronoun_lines),
     }
-    _atomic_write(folder / DELIVERY_REPORT_FILE, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    moved = organize_episode_folder(folder)
+    if subtitle_path.name in moved:
+        report["subtitle"]["file"] = str(moved[subtitle_path.name])
+    if match_path.name in moved:
+        report["matching_report"] = str(moved[match_path.name])
+    report["workspace"] = str(folder / WORKSPACE_NAME)
+    report_path = folder / WORKSPACE_NAME / DELIVERY_REPORT_FILE
+    report["delivery_report_file"] = str(report_path)
+    _atomic_write(report_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     return report
