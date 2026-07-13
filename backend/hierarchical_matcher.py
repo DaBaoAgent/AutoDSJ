@@ -6,10 +6,20 @@ import re
 from pathlib import Path
 
 from backend.event_index import build_event_index
+from backend.embed_match import dashscope_key
 from backend.narration_intent import ACTION_VOCAB, parse_intent
+from backend.sequence_decoder import decode_parent_sequences
+from backend.selective_visual import build_selective_visual_plan, visual_index_matches_plan
+from backend.text_retriever import (
+    HybridTextRetriever,
+    build_text_event_index,
+    dense_event_vectors,
+    dense_query_vectors,
+)
 from backend.visual_matcher import _semantic_score
 from backend.timeline_planner import plan_timeline
 from backend.scene_map import validate_scene_map
+from backend.voice_index import load_voice_index, voice_event_score
 
 
 def _load(path: Path) -> dict:
@@ -128,7 +138,8 @@ def _containing_scene_range(start: float, end: float, hint: dict | None) -> tupl
     return None
 
 
-def build_shadow_report(folder: Path) -> dict:
+def build_shadow_report(folder: Path, matching: object | None = None,
+                        visual: object | None = None) -> dict:
     folder = folder.resolve()
     old = _load(folder / "★ 匹配报告.json")
     scene_map = validate_scene_map(folder, old.get("segments", []))
@@ -141,6 +152,27 @@ def build_shadow_report(folder: Path) -> dict:
         if segment.get("row_type") == "narration":
             pid = segment.get("tts_parent_id") or segment.get("script_row_id")
             parent_text[pid] = parent_text.get(pid, "") + str(segment.get("text") or "")
+
+    text_payload = build_text_event_index(folder, events)
+    documents = text_payload.get("events", [])
+    key = dashscope_key()
+    use_dense_text = bool(getattr(matching, "use_dense_text", True))
+    use_voice_evidence = bool(getattr(matching, "use_voice_evidence", True))
+    max_event_candidates = int(getattr(matching, "max_event_candidates", 8))
+    try:
+        dense_vectors = dense_event_vectors(folder, documents, key) if use_dense_text else {}
+        query_texts = list(dict.fromkeys([
+            *(value for value in parent_text.values() if value),
+            *(str(item.get("visual_intent") or item.get("text") or "")
+              for item in old.get("segments", []) if item.get("row_type") == "narration"),
+        ]))
+        query_vectors = dense_query_vectors(folder, query_texts, key) if use_dense_text else {}
+    except Exception as exc:  # network/model failure must not disable lexical retrieval
+        dense_vectors, query_vectors = {}, {}
+        print(f"  ⚠ 文本向量暂不可用，继续使用 BM25/剧本精确匹配：{exc}", flush=True)
+    retriever = HybridTextRetriever(documents, dense_vectors)
+    voice_index = load_voice_index(folder) if use_voice_evidence else {
+        "schema": "v1-campplus-character-voice-index", "status": "disabled", "segments": []}
 
     output_segments, previous_subject, previous_event = [], "", None
     previous_hint_by_parent: dict[object, dict] = {}
@@ -189,19 +221,45 @@ def build_shadow_report(folder: Path) -> dict:
             if strict:
                 candidate_pool = strict
         ranked = []
+        parent_query = parent_text.get(pid, "")
+        own_vector = query_vectors.get(own_text)
+        parent_vector = query_vectors.get(parent_query)
         for event in candidate_pool:
-            semantic = _semantic_score(intent["expanded_query"], _event_text(event))
-            action = _action_score(intent, _event_text(event))
+            event_id = str(event.get("event_id"))
+            clause_text = retriever.score(
+                intent["expanded_query"], event_id, query_vector=own_vector,
+                characters=intent.get("characters") or ([intent["subject"]] if intent.get("subject") else []),
+                actions=intent.get("actions"),
+            )
+            parent_score = retriever.score(
+                parent_query, event_id, query_vector=parent_vector,
+                characters=intent.get("characters"), actions=intent.get("actions"),
+            ) if parent_query else {"total": 0.0}
+            text_score = 0.62 * float(parent_score["total"]) + 0.38 * float(clause_text["total"])
+            evidence_text = str(retriever.documents.get(event_id, {}).get("text") or _event_text(event))
+            semantic = _semantic_score(intent["expanded_query"], evidence_text)
+            action = _action_score(intent, evidence_text)
             anchor = _range_score(float(event["start"]), float(event["end"]), anchor_start, anchor_end)
             scene = _scene_score(event, hint)
-            chars = 1.0 if intent["subject"] and intent["subject"] in _event_text(event) else 0.0
-            continuity = 1.0 if previous_event == event.get("event_id") else 0.0
-            total = 0.40 * anchor + 0.18 * semantic + 0.10 * action + 0.25 * scene + 0.05 * chars + 0.02 * continuity
-            ranked.append((total, event, {"anchor": round(anchor, 4), "semantic": round(semantic, 4),
-                                          "action": round(action, 4), "scene": round(scene, 4), "character": chars,
-                                          "continuity": continuity}))
+            chars = 1.0 if intent["subject"] and intent["subject"] in evidence_text else 0.0
+            voice = voice_event_score(
+                voice_index, float(event["start"]), float(event["end"]),
+                list(dict.fromkeys([*intent.get("characters", []), intent.get("subject", "")])),
+                speaking=intent.get("state") == "speaking",
+            )
+            total = (0.10 * anchor + 0.38 * text_score + 0.07 * semantic + 0.08 * action
+                     + 0.20 * scene + 0.03 * chars + 0.14 * float(voice["total"]))
+            ranked.append((total, event, {
+                "anchor": round(anchor, 4), "text": round(text_score, 4),
+                "lexical": round(float(clause_text["lexical"]), 4),
+                "dense": round(float(clause_text["dense"]), 4),
+                "semantic": round(semantic, 4), "action": round(action, 4),
+                "scene": round(scene, 4), "character": chars,
+                "voice": round(float(voice["total"]), 4),
+                "voice_roles": voice["roles"],
+            }))
         ranked.sort(key=lambda item: item[0], reverse=True)
-        top_events = ranked[:5]
+        top_events = ranked[:max_event_candidates]
         chosen_event = top_events[0][1]
         event_shots = [shots[sid] for sid in chosen_event.get("shot_ids", []) if sid in shots]
         if hint and hint.get("ranges"):
@@ -240,7 +298,7 @@ def build_shadow_report(folder: Path) -> dict:
                            "action": round(action, 4)}
                            for score, shot, semantic, anchor, action in shot_ranked[:5]]})
         planning = []
-        for event_score, event, _ in top_events:
+        for event_score, event, event_parts in top_events:
             for sid in event.get("shot_ids", []):
                 shot = shots.get(sid)
                 if not shot:
@@ -255,9 +313,10 @@ def build_shadow_report(folder: Path) -> dict:
                 preferred_bonus = 0.30 if event["event_id"] == chosen_event.get("event_id") else 0.0
                 event_start = max(float(event["start"]), scene_range[0]) if scene_range else event["start"]
                 event_end = min(float(event["end"]), scene_range[1]) if scene_range else event["end"]
-                planning.append({"score": event_score + 0.25 * semantic + 0.35 * action + preferred_bonus,
+                planning.append({"score": event_score + 0.16 * semantic + 0.22 * action + preferred_bonus,
                     "event_id": event["event_id"], "event_start": event_start, "event_end": event_end,
                     "shot_id": sid, "shot_start": shot["start"], "shot_end": shot["end"],
+                    "scene": event.get("scene"), "evidence_scores": event_parts,
                     "allow_source_reuse": bool(planned_group)})
         if isinstance(manual_range, (list, tuple)) and len(manual_range) == 2:
             manual_start, manual_end = map(float, manual_range)
@@ -277,8 +336,29 @@ def build_shadow_report(folder: Path) -> dict:
     if ad_path.exists():
         blocked.extend((float(item["start"]), float(item["end"]))
                        for item in _load(ad_path).get("intervals", _load(ad_path) if isinstance(_load(ad_path), list) else []))
+    sequence_summary = decode_parent_sequences(output_segments)
     planning_summary = plan_timeline(output_segments, blocked)
+    planning_summary["sequence_decoder"] = sequence_summary
+    visual_plan = build_selective_visual_plan(
+        folder,
+        target=int(getattr(visual, "selective_target_frames", 45)),
+        minimum=int(getattr(visual, "selective_min_frames", 30)),
+        maximum=int(getattr(visual, "selective_max_frames", 60)),
+        segments=output_segments,
+    )
+    visual_review_ready = visual_index_matches_plan(folder)
+    planning_summary["visual_review_ready"] = visual_review_ready
     payload = {"mode": "shadow", "source_report": "★ 匹配报告.json",
+               "matcher_schema": "v3-hybrid-text-campplus-viterbi",
+               "evidence_summary": {
+                   "hybrid_text": True,
+                   "dense_text": bool(dense_vectors),
+                   "voice_index": (voice_index.get("status") == "complete"
+                                   and bool(voice_index.get("segments"))),
+                   "voice_schema": voice_index.get("schema"),
+               },
+               "visual_plan": {"frame_count": visual_plan.get("frame_count"),
+                               "ready": visual_review_ready},
                "planning_summary": planning_summary, "segments": output_segments}
     (folder / "★ 分层影子匹配报告.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
@@ -303,7 +383,8 @@ def build_shadow_report(folder: Path) -> dict:
         planned["clip_start"] = item.get("planned_clip_start")
         planned["clip_end"] = item.get("planned_clip_end")
         planned_segments.append(planned)
-    takeover = {"mode": "takeover-preview", "safe_to_render": planning_summary["unresolved"] == 0,
+    takeover = {"mode": "takeover-preview",
+                "safe_to_render": planning_summary["unresolved"] == 0 and visual_review_ready,
                 "scene_map_sha256": scene_map["sha256"],
                 "planning_summary": planning_summary, "segments": planned_segments}
     (folder / "★ 分层接管预演报告.json").write_text(

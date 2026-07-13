@@ -39,11 +39,22 @@ def plan_timeline(segments: list[dict], blocked: list[tuple[float, float]]) -> d
         ranked = []
         for candidate in segment.pop("_planning_candidates", []):
             score = float(candidate.get("score", 0))
+            # Parent-level Viterbi is the primary continuity signal. The fit
+            # pass may still fall back when the decoded shot cannot fit.
+            if candidate.get("sequence_selected"):
+                score += 1.45
             if previous:
                 if candidate.get("event_id") == previous.get("event_id"):
-                    score += 0.12
-                if float(candidate["shot_start"]) >= float(previous.get("start", 0)):
-                    score += 0.05
+                    score += 0.28
+                delta = float(candidate["shot_start"]) - float(previous.get("start", 0))
+                if delta >= -0.15:
+                    score += 0.10
+                else:
+                    score -= 0.85 + min(0.65, abs(delta) / 90.0)
+                previous_scene = previous.get("scene")
+                current_scene = candidate.get("scene")
+                if previous_scene and current_scene and current_scene != previous_scene:
+                    score -= 1.20
             ranked.append((score, candidate))
         ranked.sort(key=lambda item: item[0], reverse=True)
         chosen = None

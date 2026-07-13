@@ -68,6 +68,24 @@ class VisualSettings(BaseModel):
     face_threshold: float = Field(0.38, ge=0.20, le=0.80)  # 余弦阈值，越高越严
     face_min_size: int = Field(46, ge=20, le=400)  # 人脸框最小边(px)，太小不信
     face_det_size: int = Field(640, ge=320, le=1280)  # 检测输入尺寸
+    # Formal pipeline uses a bounded candidate-driven visual review, never a
+    # dense whole-episode scan.
+    selective_target_frames: int = Field(45, ge=30, le=60)
+    selective_min_frames: int = Field(30, ge=30, le=60)
+    selective_max_frames: int = Field(60, ge=30, le=60)
+
+    @model_validator(mode="after")
+    def normalize_selective_frame_budget(self):
+        if not self.selective_min_frames <= self.selective_target_frames <= self.selective_max_frames:
+            raise ValueError("selective visual budget must satisfy min <= target <= max")
+        return self
+
+
+class MatchingSettings(BaseModel):
+    use_dense_text: bool = True
+    use_voice_evidence: bool = True
+    voice_similarity_threshold: float = Field(0.48, ge=0.20, le=0.90)
+    max_event_candidates: int = Field(8, ge=3, le=20)
 
 
 class AppSettings(BaseModel):
@@ -77,6 +95,7 @@ class AppSettings(BaseModel):
     voice: VoiceSettings = VoiceSettings()
     drama: DramaSettings = DramaSettings()
     visual: VisualSettings = VisualSettings()
+    matching: MatchingSettings = MatchingSettings()
 
     @model_validator(mode="after")
     def normalize_audio_options(self):

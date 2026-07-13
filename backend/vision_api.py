@@ -176,6 +176,26 @@ def _extract_frames(video: Path, out_dir: Path, interval: float, prefix: str,
     ]
 
 
+def _extract_frames_at_times(video: Path, out_dir: Path, times: list[float], prefix: str,
+                             *, width: int = 480, height: int = 270,
+                             jpeg_q: int = 5) -> list[FrameSample]:
+    """Extract an irregular, candidate-driven frame set with fast input seeks."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    samples: list[FrameSample] = []
+    width = max(320, int(width))
+    height = max(180, int(height))
+    scale = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2")
+    for index, value in enumerate(sorted(set(round(float(x), 3) for x in times)), 1):
+        image = out_dir / f"{prefix}_{index:06d}.jpg"
+        _run([ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{value:.3f}",
+              "-i", str(video), "-frames:v", "1", "-vf", scale,
+              "-q:v", str(max(2, min(8, int(jpeg_q)))), str(image)], timeout=120)
+        if image.exists():
+            samples.append(FrameSample(value, 0, image.name, str(image)))
+    return samples
+
+
 def _clean_model_json(text: str) -> object:
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I)
     candidates = [

@@ -17,6 +17,13 @@ import json
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    # Hermes/PowerShell may start Python with a GBK pipe even when all project
+    # files are UTF-8; keep status/progress symbols from crashing the CLI.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from backend import runner
 from backend.cleanup import cleanup_render_artifacts
 from backend.config_store import (
@@ -80,11 +87,26 @@ def _visual_stats(folder: Path) -> dict:
     success = int(payload.get("success_count") or 0)
     failed = int(payload.get("failed_count") or 0)
     status = str(payload.get("status") or "")
-    ready = frame_count > 0 and success > 0 and status not in {"extracting_frames", "recognizing_frames"}
+    selective_schema = payload.get("visual_schema") == "v3-selective-face-720p"
+    plan_matches = True
+    plan_path = folder / "_selective_visual_plan.json"
+    if plan_path.exists():
+        try:
+            plan = json.loads(plan_path.read_text("utf-8"))
+            planned_times = [round(float(value), 3) for value in plan.get("times", [])]
+            indexed_times = [round(float(item.get("time", -1)), 3)
+                             for item in payload.get("source_signature", [])
+                             if int(item.get("source_index", 1)) == 1]
+            plan_matches = planned_times == indexed_times
+        except (OSError, ValueError, TypeError):
+            plan_matches = False
+    ready = (0 < frame_count <= 60 and success == frame_count and selective_schema
+             and plan_matches and status not in {"extracting_frames", "recognizing_frames"})
     return {
         "exists": True, "ready": ready, "frame_count": frame_count,
         "success": success, "failed": failed, "status": status,
         "interval": float(payload.get("frame_interval") or 0.0),
+        "plan_matches": plan_matches,
     }
 
 
@@ -92,21 +114,31 @@ def _visual_ready(folder: Path) -> bool:
     return _visual_stats(folder)["ready"]
 
 
-def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, workers: int = 3) -> dict:
+def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, workers: int = 3,
+                target_frames: int = 0) -> dict:
     key = _dashscope_key(settings)
     if not key:
         raise SystemExit("缺少百炼 DASHSCOPE_API_KEY。请用 `dy set-key --dashscope <KEY>` 配置。")
     folder = Path(settings.material_folder)
-    # 续跑（非强制、未指定间隔）时复用已有索引的抽帧间隔，保证帧 ID 对齐、命中缓存
-    if not force and interval <= 0:
-        existing = _visual_stats(folder)
-        if existing.get("exists") and existing.get("interval"):
-            interval = float(existing["interval"])
+    sample_times = None
+    if interval <= 0:
+        from backend.selective_visual import build_selective_visual_plan
+        from backend.shot_index import build_shot_index
+        build_shot_index(folder, force=False)
+        vis = settings.visual
+        plan = build_selective_visual_plan(
+            folder,
+            target=target_frames or vis.selective_target_frames,
+            minimum=vis.selective_min_frames,
+            maximum=vis.selective_max_frames,
+        )
+        sample_times = {1: plan["times"]}
     mode = "重跑" if force else "识别/续跑"
     vis = settings.visual
     _has_gallery = (folder / vis.face_gallery_file).exists() or (folder.parent / vis.face_gallery_file).exists()
     face_hint = "开" if vis.use_face_gallery and _has_gallery else "关/无库"
-    print(f"→ 视觉{mode}（模型 {settings.api.visual_model}，并发 {workers}，抽帧 {interval or '自适应'}，"
+    sampling = (f"候选复核 {len(sample_times[1])} 帧" if sample_times else f"诊断密集抽帧 {interval:g}s")
+    print(f"→ 视觉{mode}（模型 {settings.api.visual_model}，并发 {workers}，{sampling}，"
           f"{vis.frame_width}×{vis.frame_height}，每批 {vis.batch}，人脸库 {face_hint}）…")
     result = build_source_index(
         settings,
@@ -118,6 +150,7 @@ def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, wo
         visual_workers=workers,
         force_visual=force,
         enable_visual_model=True,
+        visual_sample_times=sample_times,
     )
     fc = int(result.get("visual_frame_count") or 0)
     sc = int(result.get("visual_success_count") or 0)
@@ -145,7 +178,8 @@ def cmd_detect(args: argparse.Namespace) -> None:
 def cmd_visual(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
-    _run_visual(settings, force=args.force, interval=args.interval, workers=args.workers)
+    _run_visual(settings, force=args.force, interval=args.interval, workers=args.workers,
+                target_frames=args.target_frames)
 
 
 def cmd_shots(args: argparse.Namespace) -> None:
@@ -177,20 +211,39 @@ def cmd_shadow_match(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     from backend.hierarchical_matcher import build_shadow_report
     folder = Path(settings.material_folder)
-    result = build_shadow_report(folder)
+    result = build_shadow_report(folder, settings.matching, settings.visual)
     print(f"分层影子匹配完成：{len(result.get('segments', []))} 个解说分镜"
           f" → {folder / '★ 分层影子匹配报告.json'}")
     print(f"新旧并排对比 → {folder / '★ 新旧匹配并排对比.json'}")
     summary = result.get("planning_summary", {})
+    visual_plan = result.get("visual_plan", {})
+    state = "ready" if visual_plan.get("ready") else "pending dy visual + shadow-match"
+    print(f"  selective visual review: {visual_plan.get('frame_count', 0)} frames ({state})"
+          f" -> {folder / '_selective_visual_plan.json'}")
     print(f"接管预演：就绪 {summary.get('ready', 0)} / 未解决 {summary.get('unresolved', 0)}"
           f" → {folder / '★ 分层接管预演报告.json'}")
+
+
+def cmd_voices(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    from backend.voice_index import build_voice_index
+    folder = Path(settings.material_folder)
+    try:
+        result = build_voice_index(
+            folder,
+            force=args.force,
+            threshold=settings.matching.voice_similarity_threshold,
+        )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(f"CAM++ 声纹索引完成：{result.get('segment_count', 0)} 个说话区间 / "
+          f"角色 {', '.join(result.get('reference_roles', [])) or '未映射'}"
+          f" → {folder / '_source_voice_index.json'}")
 
 
 def cmd_script(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
-    if not _visual_ready(Path(settings.material_folder)):
-        raise SystemExit("视觉索引未就绪。请先运行 `dy visual`。")
     table = generate_manual_script_table(settings)
     validation = table.get("validation", {})
     print(f"脚本表已生成：原片 {validation.get('source_clips', 0)} 段 · "
@@ -226,14 +279,17 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit("--skip-visual 需要已有可用视觉索引，但未检测到。请先运行 `dy visual`。")
         print(f"  复用已有视觉索引（--skip-visual），成功 {stats['success']}/{stats['frame_count']} 帧")
     elif args.force_visual:
-        _run_visual(settings, force=True, interval=args.interval, workers=args.workers)
+        _run_visual(settings, force=True, interval=0, workers=args.workers,
+                    target_frames=args.target_frames)
     elif stats["ready"] and not args.resume and stats["failed"] == 0:
         print(f"  复用已有视觉索引，成功 {stats['success']}/{stats['frame_count']} 帧（--force-visual 重跑）")
     elif stats["ready"] and stats["failed"] > 0 and not args.resume:
         print(f"  已有索引但 {stats['failed']} 帧失败，自动续跑抢救…")
-        _run_visual(settings, force=False, interval=args.interval, workers=args.workers)
+        _run_visual(settings, force=False, interval=0, workers=args.workers,
+                    target_frames=args.target_frames)
     else:
-        _run_visual(settings, force=False, interval=args.interval, workers=args.workers)
+        _run_visual(settings, force=False, interval=0, workers=args.workers,
+                    target_frames=args.target_frames)
 
     print("[3/4] 生成脚本表")
     table = generate_manual_script_table(settings)
@@ -296,6 +352,16 @@ def cmd_status(args: argparse.Namespace) -> None:
             print("  人脸库 ⚠ 存在但损坏（`dy faces build` 重建）")
     else:
         print("  人脸库 · 未建（`dy faces build`，缺则退回纯 VL 描述）")
+    voice_path = folder / "_source_voice_index.json"
+    if voice_path.exists():
+        try:
+            voice = json.loads(voice_path.read_text("utf-8"))
+            print(f"  CAM++声纹 ✓ {int(voice.get('segment_count', 0))} 说话区间 / "
+                  f"{len(voice.get('reference_roles', []))} 角色")
+        except (OSError, json.JSONDecodeError):
+            print("  CAM++声纹 ⚠ 索引损坏（`dy voices --force` 重建）")
+    else:
+        print("  CAM++声纹 · 未建（可选；`dy voices`）")
     print(f"  脚本表 {'✓' if (folder / SCRIPT_TABLE_FILE).exists() else '✗ 未生成'}")
     print(f"  成片 {'✓ ' + str(folder / '★ 成片.mp4') if (folder / '★ 成片.mp4').exists() else '✗ 未生成'}")
 
@@ -359,6 +425,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             print("· 人脸识别 insightface 未装（可选；`pip install insightface onnxruntime opencv-python-headless`）")
     except Exception:
         print("· 人脸识别 insightface 未装（可选）")
+    try:
+        __import__("speakerlab")
+        print("✓ CAM++ speakerlab 就绪（有 _voices 参考音频时可建角色声纹）")
+    except ImportError:
+        print("· CAM++ speakerlab 未装（可选；`pip install -r requirements-audio.txt`）")
     # Material folder
     folder = settings.material_folder
     if folder and Path(folder).is_dir():
@@ -526,12 +597,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_run = sub.add_parser("run", help="一键全流程：检测→视觉→脚本表→成片")
+    p_run = sub.add_parser("run", help="正式管线：选择性视觉复核→脚本表→分层接管→成片")
     p_run.add_argument("--folder", help="素材文件夹（覆盖已保存路径）")
     p_run.add_argument("--force-visual", action="store_true", help="强制重跑视觉识别（清空重来）")
     p_run.add_argument("--resume", action="store_true", help="续跑视觉识别：复用已识别帧，只重试失败帧")
     p_run.add_argument("--skip-visual", action="store_true", help="跳过视觉识别（需已有索引）")
-    p_run.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应）")
+    p_run.add_argument("--target-frames", type=int, default=45,
+                       help="选择性视觉复核帧数（30-60，默认45）")
     p_run.add_argument("--workers", type=int, default=3, help="视觉识别并发批数（默认3）")
     p_run.add_argument("--concurrency", type=int, default=None, help="渲染并发（覆盖，跳过基准）")
     p_run.add_argument("--no-render", action="store_true", help="只做匹配并写匹配报告/字幕，不成片")
@@ -547,10 +619,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre.add_argument("--folder")
     p_pre.set_defaults(func=cmd_preflight)
 
-    p_visual = sub.add_parser("visual", help="运行视觉识别，建立视觉索引（默认续跑）")
+    p_visual = sub.add_parser("visual", help="候选驱动视觉复核（默认45帧，硬限制30-60）")
     p_visual.add_argument("--folder")
     p_visual.add_argument("--force", action="store_true", help="强制重跑（清空重来）")
     p_visual.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应/复用）")
+    p_visual.add_argument("--target-frames", type=int, default=45,
+                          help="选择性视觉复核帧数（30-60，默认45）")
     p_visual.add_argument("--workers", type=int, default=3, help="并发批数（默认3）")
     p_visual.set_defaults(func=cmd_visual)
 
@@ -568,6 +642,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_shadow = sub.add_parser("shadow-match", help="分层影子匹配；不修改正式成片时间线")
     p_shadow.add_argument("--folder")
     p_shadow.set_defaults(func=cmd_shadow_match)
+
+    p_voices = sub.add_parser("voices", help="建立 CAM++ 说话人/角色声纹索引")
+    p_voices.add_argument("--folder")
+    p_voices.add_argument("--force", action="store_true")
+    p_voices.set_defaults(func=cmd_voices)
 
     p_clean = sub.add_parser("clean", help="清理旧裁切片、旧配音、渲染临时文件；保留原片/场景地图/索引/成片")
     p_clean.add_argument("--folder")

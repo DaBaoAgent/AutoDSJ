@@ -2,9 +2,9 @@
 
 面向电视剧、短剧解说的单线自动剪辑管线。正式成片只允许以下路径：
 
-`文案审校 → 视觉索引 → 完整大场景地图 → 事件/物理镜头索引 → 分层影子匹配 → 场景门禁 → Qwen 克隆配音 → 渲染`
+`文案审校 → 字幕/剧本索引 → 完整大场景地图 → 事件/物理镜头索引 → 父段全局序列解码 → 30～60帧选择性视觉复核 → 场景门禁 → Qwen 克隆配音 → 渲染`
 
-核心原则不是在整集里逐句乱搜，而是先确定整段解说所属的大场景，再在这个大场景内部按人物、动作、对白字幕和关键帧寻找动作瞬间。
+核心原则不是在整集里逐句乱搜，也不是先做数百帧全片视觉扫描。先用 SRT、审校剧本和场景知识把整段解说缩到大场景/事件块，再以父段为单位做全局连续序列解码，最后只对歧义候选、动作镜头和场景覆盖点复核 30～60 帧。
 
 ## 唯一正式管线
 
@@ -30,6 +30,9 @@
 ├── _source_visual_index.json
 ├── _source_shot_index.json
 ├── _source_event_index.json
+├── _subtitle_event_index.json
+├── _source_voice_index.json          # 可选：CAM++ 说话人/角色声纹
+├── _selective_visual_plan.json       # 每集 30～60 帧复核计划
 ├── ★ 分层接管预演报告.json
 └── ★ 成片.mp4
 ```
@@ -57,13 +60,15 @@ cd D:\@kaifa\DaobaoAI-DY\project
 
 文案未通过时不得继续自动成片。
 
-### 2. 建立视觉与脚本基础
+### 2. 建立字幕/剧本与物理镜头基础
 
 ```powershell
 .\.venv\Scripts\python.exe dy.py preflight --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe dy.py visual --folder "D:\自动剪辑\某剧\第N集"
 .\.venv\Scripts\python.exe dy.py script --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe dy.py shots --folder "D:\自动剪辑\某剧\第N集"
 ```
+
+先用 SRT、剧本和物理镜头关键图完成场景地图。不要为了建图恢复每 8～10 秒一帧的全片 VL 扫描。
 
 首次处理新集、尚无旧匹配报告时，可运行一次不渲染的引导匹配：
 
@@ -127,8 +132,9 @@ cd D:\@kaifa\DaobaoAI-DY\project
 ### 4. 建分层索引并影子匹配
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py shots --folder "D:\自动剪辑\某剧\第N集"
 .\.venv\Scripts\python.exe dy.py events --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe dy.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe dy.py visual --folder "D:\自动剪辑\某剧\第N集" --target-frames 45
 .\.venv\Scripts\python.exe dy.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
 ```
 
@@ -136,7 +142,25 @@ cd D:\@kaifa\DaobaoAI-DY\project
 
 `大场景 → 连续事件块 → 物理镜头 → 动作瞬间`
 
-候选证据综合：关键识别帧、人脸参考比对、原片 SRT、剧本知识、人物/动作/地点意图。字幕与人物证据用于大场景内排序，不能把候选带出场景边界。
+候选证据按以下顺序工作：
+
+1. BM25 字面检索合并原片 SRT、场景人物/关键词和已审校剧本；
+2. `text-embedding-v4` 补足解说概括与字幕字面之间的语义差，事件和查询向量均按内容签名缓存；
+3. CAM++ 在 SRT 对白区间内与角色参考音频比对，提供“谁正在说话”的声纹证据；无需跑全片 VAD/聚类；
+4. 父段 Viterbi 解码整组候选，奖励同一/相邻事件的顺序推进，重罚倒序、跨大场景跳转；
+5. 只对动作、低分差歧义候选和每个大场景覆盖点调用视觉模型，单集硬限制 30～60 帧。
+
+`shadow-match` 会写出 `_selective_visual_plan.json`。候选、场景图或计划时间变化后，旧视觉索引会自动失效；重新执行 `visual` 后再跑一次 `shadow-match`，让识别结果进入最终候选。任何证据都只能在父场景内排序，不能把候选带出场景边界。
+
+可选声纹启用：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-audio.txt
+# 放置 <剧集根>\_voices\<角色名>\*.wav（每人至少一段干净对白）
+.\.venv\Scripts\python.exe dy.py voices --folder "D:\自动剪辑\某剧\第N集"
+```
+
+没有 `speakerlab` 或角色参考音频时，匹配器明确记录 `voice_index=false` 并继续使用字幕/剧本，不伪造角色声纹。
 
 检查以下报告：
 
@@ -172,6 +196,17 @@ cd D:\@kaifa\DaobaoAI-DY\project
     "keep_source_audio": true,
     "source_play_volume": 100,
     "narration_source_volume": 0
+  },
+  "visual": {
+    "selective_target_frames": 45,
+    "selective_min_frames": 30,
+    "selective_max_frames": 60
+  },
+  "matching": {
+    "use_dense_text": true,
+    "use_voice_evidence": true,
+    "voice_similarity_threshold": 0.48,
+    "max_event_candidates": 8
   }
 }
 ```
@@ -192,7 +227,7 @@ cd D:\@kaifa\DaobaoAI-DY\project
 
 - 原片、原字幕、用户文案；
 - `_scene_map.json`；
-- 视觉、人脸、字幕、镜头、事件和帧嵌入索引；
+- 选择性视觉、人脸、字幕/剧本、声纹、镜头、事件和文本嵌入索引；
 - 分层匹配审计报告；
 - `★ 成片.mp4`、`★ 字幕.srt`、`★ 匹配报告.json` 和发布文件。
 
@@ -215,6 +250,10 @@ backend/scene_map.py            完整场景地图校验与哈希门禁
 backend/narration_intent.py     结构化人物/动作/地点/转场意图
 backend/shot_index.py           物理镜头和多关键帧索引
 backend/event_index.py          大场景内连续事件块
+backend/text_retriever.py       SRT/审校剧本 BM25＋向量混合检索
+backend/voice_index.py          本地 CAM++ 字幕区间角色声纹证据
+backend/sequence_decoder.py     父段候选 Viterbi 全局序列解码
+backend/selective_visual.py     候选驱动 30～60 帧视觉复核计划
 backend/hierarchical_matcher.py 分层候选与影子报告
 backend/timeline_planner.py     主场景/尾句承接计划
 backend/cleanup.py              安全清理可重建产物

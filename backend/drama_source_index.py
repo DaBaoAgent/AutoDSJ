@@ -15,6 +15,7 @@ from .vision_api import (
     FrameSample,
     _call_siliconflow_vision,
     _extract_frames,
+    _extract_frames_at_times,
     _format_time,
     _probe_duration,
     _subtitle_json,
@@ -29,7 +30,7 @@ SOURCE_CANDIDATE_FILE = "_source_clip_candidates.json"
 QWEN37_PLUS_MAX_BATCH_FRAMES = 500
 # 索引结构版本：抽帧分辨率↑/结构化 prompt/人脸身份注入后旧缓存不再兼容，
 # 版本变化时自动重跑视觉识别（无需用户手动 --force-visual）。
-VISUAL_SCHEMA = "v2-face-720p"
+VISUAL_SCHEMA = "v3-selective-face-720p"
 
 ROLE_WEIGHTS = {
     "hook": 0.32,
@@ -589,6 +590,7 @@ def build_source_index(
     visual_workers: int = 1,
     force_visual: bool = False,
     enable_visual_model: bool = True,
+    visual_sample_times: dict[int, list[float]] | None = None,
 ) -> dict:
     folder = _folder(settings.material_folder)
     media = detect_materials(settings.material_folder, settings.drama.source_count)
@@ -662,12 +664,20 @@ def build_source_index(
                     progress=max(1, int(index / max(1, len(video_paths)) * 10)),
                     frame_count=len(frame_records),
                 )
-            frames = _extract_frames(
-                video, temp / f"source_{source_index}", frame_interval, f"source{source_index}",
-                width=settings.visual.frame_width,
-                height=settings.visual.frame_height,
-                jpeg_q=settings.visual.jpeg_q,
-            )
+            selected = (visual_sample_times or {}).get(source_index)
+            if selected is not None:
+                frames = _extract_frames_at_times(
+                    video, temp / f"source_{source_index}", selected, f"source{source_index}",
+                    width=settings.visual.frame_width, height=settings.visual.frame_height,
+                    jpeg_q=settings.visual.jpeg_q,
+                )
+            else:
+                frames = _extract_frames(
+                    video, temp / f"source_{source_index}", frame_interval, f"source{source_index}",
+                    width=settings.visual.frame_width,
+                    height=settings.visual.frame_height,
+                    jpeg_q=settings.visual.jpeg_q,
+                )
             frame_records.extend(
                 _source_record(frame, source_index, video, frame_interval)
                 for frame in frames
