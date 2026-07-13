@@ -16,7 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-LABEL_RE = re.compile(r"^\s*(原片|解说)\s*[:：]\s*$")
+LABEL_RE = re.compile(r"^\s*(原片|解说)\s*[:：]\s*(.*)$")
 
 
 def convert(src_path: Path) -> list[str]:
@@ -26,7 +26,11 @@ def convert(src_path: Path) -> list[str]:
         s = ln.strip()
         if not s:              # 去空行
             continue
-        if LABEL_RE.match(s):  # 去 原片:/解说: 标签行
+        match = LABEL_RE.match(s)
+        if match:              # 去标签；兼容“解说：正文”写在同一行
+            tail = match.group(2).strip()
+            if tail:
+                out.append(tail)
             continue
         out.append(s)
     return out

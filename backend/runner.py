@@ -16,6 +16,7 @@ from typing import Callable
 
 from .concurrency import get_concurrency
 from .config_store import runtime_env
+from .delivery import run_delivery
 from .manual_script import SCRIPT_TABLE_FILE
 from .media import detect_materials
 from .postprocess import run_postprocess
@@ -144,5 +145,12 @@ def render(settings: AppSettings, *, on_line: LogFn | None = None, concurrency: 
     work_dir = RUNTIME / "postprocess"
     work_dir.mkdir(parents=True, exist_ok=True)
     run_postprocess(settings, folder, work_dir)
+    _log(on_line, "生成发布信息、剪映字幕并执行交付校验…")
+    delivery = run_delivery(settings, output)
+    _log(
+        on_line,
+        f"发布交付完成：SRT {delivery['subtitle']['entry_count']} 条 / "
+        f"剪映字幕 {delivery['jianying']['line_count']} 行 / 3 个标题 / 5 个标签",
+    )
     _log(on_line, f"成片完成：{output}")
     return output

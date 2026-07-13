@@ -253,6 +253,17 @@ def cmd_script(args: argparse.Namespace) -> None:
         print(f"  ⚠ 低匹配度原片行：{low}")
 
 
+def cmd_deliver(args: argparse.Namespace) -> None:
+    settings = _resolve_settings(args.folder)
+    from backend.delivery import run_delivery
+
+    report = run_delivery(settings)
+    print("发布交付完成：")
+    print(f"  发布信息：{report['publish']['file']}")
+    print(f"  剪映字幕：{report['jianying']['file']}（{report['jianying']['line_count']} 行）")
+    print(f"  交付清单：{Path(settings.material_folder) / '★ 交付清单.json'}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
@@ -655,6 +666,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_script = sub.add_parser("script", help="生成脚本表（对齐字幕/文案）")
     p_script.add_argument("--folder")
     p_script.set_defaults(func=cmd_script)
+
+    p_deliver = sub.add_parser("deliver", help="为已有成片生成发布信息/剪映字幕并执行交付校验")
+    p_deliver.add_argument("--folder")
+    p_deliver.set_defaults(func=cmd_deliver)
 
     p_status = sub.add_parser("status", help="查看当前工作流进度")
     p_status.add_argument("--folder")
