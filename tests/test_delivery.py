@@ -42,10 +42,10 @@ class DeliveryTests(unittest.TestCase):
                 (folder / "★ 剪映字幕导入.txt").read_text("utf-8").splitlines(),
                 ["你来了", "她没想到，对方却隐瞒了真相。"],
             )
-            saved = json.loads((folder / "_DY工作文件" / "★ 交付清单.json").read_text("utf-8"))
+            saved = json.loads((folder / "_AutoDSJ工作文件" / "★ 交付清单.json").read_text("utf-8"))
             self.assertEqual(saved["status"], "ready")
             self.assertFalse((folder / "★ 字幕.srt").exists())
-            self.assertTrue((folder / "_DY工作文件" / "★ 字幕.srt").exists())
+            self.assertTrue((folder / "_AutoDSJ工作文件" / "★ 字幕.srt").exists())
 
     @patch("backend.delivery.probe_video")
     def test_delivery_rejects_subtitle_past_video_end(self, probe):

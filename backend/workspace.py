@@ -4,7 +4,11 @@ import shutil
 from pathlib import Path
 
 
-WORKSPACE_NAME = "_DY工作文件"
+WORKSPACE_NAME = "_AutoDSJ工作文件"
+# Backward compatibility — 2026-07 renamed from _DY工作文件
+LEGACY_WORKSPACE_NAME = "_DY工作文件"
+WORKSPACE_NAMES = {WORKSPACE_NAME, LEGACY_WORKSPACE_NAME}
+
 FINAL_KEEP_NAMES = {"★ 成片.mp4", "★ 发布信息.txt", "★ 剪映字幕导入.txt"}
 SOURCE_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".m4v"}
 SOURCE_SUBTITLE_EXTENSIONS = {".srt", ".ass", ".vtt"}
@@ -24,7 +28,7 @@ def artifact_path(folder: Path, name: str) -> Path:
 
 
 def _is_delivery_root_item(path: Path) -> bool:
-    if path.name == WORKSPACE_NAME or path.name in FINAL_KEEP_NAMES:
+    if path.name in WORKSPACE_NAMES or path.name in FINAL_KEEP_NAMES:
         return True
     if path.name.startswith("_") or path.name.startswith("★"):
         return False

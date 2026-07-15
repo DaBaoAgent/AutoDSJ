@@ -24,7 +24,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(set(moved), {"_scene_map.json", "★ 字幕.srt", "_anchored_clips"})
             self.assertEqual(
                 {item.name for item in folder.iterdir()},
-                set(keep) | {"_DY工作文件"},
+                set(keep) | {"_AutoDSJ工作文件"},
             )
 
     def test_restore_makes_archived_indexes_available_again(self):
@@ -39,7 +39,7 @@ class WorkspaceTests(unittest.TestCase):
 
             self.assertEqual([item.name for item in restored], ["_scene_map.json"])
             self.assertTrue((folder / "_scene_map.json").exists())
-            self.assertFalse((folder / "_DY工作文件").exists())
+            self.assertFalse((folder / "_AutoDSJ工作文件").exists())
 
 
 if __name__ == "__main__":

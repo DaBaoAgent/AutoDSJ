@@ -373,7 +373,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 def cmd_clean(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     moved = organize_episode_folder(Path(settings.material_folder))
-    print(f"已把 {len(moved)} 项工作文件归档到：{Path(settings.material_folder) / '_DY工作文件'}")
+    print(f"已把 {len(moved)} 项工作文件归档到：{Path(settings.material_folder) / '_AutoDSJ工作文件'}")
 
 
 def cmd_status(args: argparse.Namespace) -> None:

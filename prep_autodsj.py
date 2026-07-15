@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""AutoDSJ 前置脚本 —— 每次跑管线前运行，确保 _DY工作文件/ 干净有最新索引"""
+"""AutoDSJ 前置脚本 —— 每次跑管线前运行，确保 _AutoDSJ工作文件/ 干净有最新索引"""
 
 import os, sys, json, shutil
 from pathlib import Path
 
-WORKSPACE = "_DY工作文件"
+WORKSPACE = "_AutoDSJ工作文件"
 DY_INDEX_FILES = [
     "_source_shot_index.json", "_source_shot_boundaries.json",
     "_source_event_index.json", "_source_visual_index.json",
@@ -32,7 +32,7 @@ def main(folder: str):
         dst = ws / fname
         if src.exists():
             shutil.copy2(src, dst)
-            actions.append(f"  cp {fname} → _DY工作文件/")
+            actions.append(f"  cp {fname} → _AutoDSJ工作文件/")
 
     # 2. 搬报告文件（有就搬）
     for fname in DY_REPORT_FILES:
@@ -40,7 +40,7 @@ def main(folder: str):
         dst = ws / fname
         if src.exists():
             shutil.copy2(src, dst)
-            actions.append(f"  cp {fname} → _DY工作文件/")
+            actions.append(f"  cp {fname} → _AutoDSJ工作文件/")
 
     # 3. 删根目录散落的临时文件（保持整洁）
     for fname in DY_INDEX_FILES + DY_REPORT_FILES:
