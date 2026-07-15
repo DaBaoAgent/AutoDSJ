@@ -204,6 +204,13 @@ def _build_identity_map(folder: Path, records: list[dict], settings: AppSettings
     return identity_map
 
 
+def _face_gallery_configured(folder: Path, settings: AppSettings) -> bool:
+    if not settings.visual.use_face_gallery:
+        return False
+    name = settings.visual.face_gallery_file
+    return (folder / name).exists() or (folder.parent / name).exists()
+
+
 def _annotate_source_frames(
     folder: Path,
     records: list[dict],
@@ -314,6 +321,16 @@ def _annotate_source_frames(
 
         def _call() -> list[dict]:
             try:
+                # In the first-run pipeline sparse extraction is still running
+                # while API batches are submitted.  Wait only for this batch's
+                # files instead of blocking on the complete episode frame set.
+                deadline = time.monotonic() + 150.0
+                while any(not Path(item["image_path"]).is_file() for item in batch):
+                    if time.monotonic() >= deadline:
+                        missing = [item["frame_id"] for item in batch
+                                   if not Path(item["image_path"]).is_file()]
+                        raise RuntimeError(f"抽帧流水线超时：{missing}")
+                    time.sleep(0.05)
                 return _call_siliconflow_vision(api_key, model, result["api_url"], batch)
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")[-800:]
@@ -610,8 +627,10 @@ def build_source_index(
     subtitle_sources = []
     subtitle_records = []
     frame_records: list[dict] = []
+    extraction_futures = []
 
-    with tempfile.TemporaryDirectory(prefix="daobaoai_dy_source_") as temp_root:
+    with tempfile.TemporaryDirectory(prefix="daobaoai_dy_source_") as temp_root, \
+            ThreadPoolExecutor(max_workers=max(1, min(3, len(video_paths)))) as extraction_pool:
         temp = Path(temp_root)
         if enable_visual_model:
             _write_visual_progress(
@@ -666,11 +685,22 @@ def build_source_index(
                 )
             selected = (visual_sample_times or {}).get(source_index)
             if selected is not None:
-                frames = _extract_frames_at_times(
-                    video, temp / f"source_{source_index}", selected, f"source{source_index}",
+                out_dir = temp / f"source_{source_index}"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                values = sorted(set(round(float(value), 3) for value in selected))
+                frames = [
+                    FrameSample(
+                        value, 0, f"source{source_index}_{frame_no:06d}.jpg",
+                        str(out_dir / f"source{source_index}_{frame_no:06d}.jpg"),
+                    )
+                    for frame_no, value in enumerate(values, 1)
+                ]
+                extraction_futures.append(extraction_pool.submit(
+                    _extract_frames_at_times,
+                    video, out_dir, values, f"source{source_index}",
                     width=settings.visual.frame_width, height=settings.visual.frame_height,
-                    jpeg_q=settings.visual.jpeg_q,
-                )
+                    jpeg_q=settings.visual.jpeg_q, workers=visual_workers,
+                ))
             else:
                 frames = _extract_frames(
                     video, temp / f"source_{source_index}", frame_interval, f"source{source_index}",
@@ -706,6 +736,13 @@ def build_source_index(
                 progress=12,
                 frame_count=len(frame_records),
             )
+            # Face identity must be known before the VL prompt.  Only this
+            # optional branch waits for all frames; the common no-gallery path
+            # overlaps extraction with the first visual API batches.
+            if _face_gallery_configured(folder, settings):
+                for future in extraction_futures:
+                    future.result()
+            identity_map = _build_identity_map(folder, frame_records, settings)
             visual_index = _annotate_source_frames(
                 folder,
                 frame_records,
@@ -716,11 +753,14 @@ def build_source_index(
                 delay_sec=visual_delay_sec,
                 workers=visual_workers,
                 force=force_visual,
-                identity_map=_build_identity_map(folder, frame_records, settings),
+                identity_map=identity_map,
             )
         else:
             visual_index = _blank_visual_index(frame_records, model, frame_interval)
             _write_json_atomic(folder / SOURCE_VISUAL_FILE, visual_index)
+
+        for future in extraction_futures:
+            future.result()
 
     subtitle_payload = {
         "sources": subtitle_sources,

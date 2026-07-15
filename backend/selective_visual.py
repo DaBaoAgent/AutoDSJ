@@ -32,8 +32,62 @@ def _uniform(left: float, right: float, count: int) -> list[float]:
     return [left + step * (index + 0.5) for index in range(count)]
 
 
-def build_selective_visual_plan(folder: Path, *, target: int = 45, minimum: int = 30,
-                                maximum: int = 60, segments: list[dict] | None = None) -> dict:
+def _script_segments(folder: Path) -> list[dict]:
+    table = _load(folder / "_drama_script_table.json")
+    if not table:
+        return []
+    from backend.narration_intent import parse_intent
+    return [
+        {
+            "segment_id": f"script-{row.get('row_id')}",
+            "intent": parse_intent(str(row.get("text") or "")),
+            "candidate_events": [],
+            "candidate_shots": [],
+        }
+        for row in table.get("rows", [])
+        if row.get("row_type") == "narration"
+    ]
+
+
+def resolve_visual_target(*, requested: int, preferred: int, minimum: int, maximum: int,
+                          scene_count: int, segments: list[dict]) -> tuple[int, dict]:
+    """Choose a bounded visual budget from scene complexity and match risk."""
+    minimum = max(1, min(int(minimum), 60))
+    maximum = max(minimum, min(int(maximum), 60))
+    preferred = max(minimum, min(int(preferred), maximum))
+    if int(requested or 0) > 0:
+        fixed = max(minimum, min(int(requested), maximum))
+        return fixed, {"mode": "fixed", "score": None, "level": "manual"}
+
+    action_count = acting_count = ambiguous_count = 0
+    for segment in segments:
+        intent = segment.get("intent") or {}
+        action_count += int(bool(intent.get("actions")))
+        acting_count += int(intent.get("state") not in {None, "speaking"})
+        candidates = segment.get("candidate_events") or []
+        if len(candidates) >= 2:
+            margin = float(candidates[0].get("score", 0)) - float(candidates[1].get("score", 0))
+            ambiguous_count += int(margin < 0.08)
+    score = (max(0, scene_count - 6) * 0.45
+             + min(8, action_count) * 0.9
+             + min(6, ambiguous_count) * 1.3
+             + min(8, acting_count) * 0.25)
+    if score < 3.0 and scene_count <= 8:
+        target, level = minimum, "low"
+    elif score < 9.0 and scene_count <= 15:
+        target, level = preferred, "medium"
+    else:
+        target, level = maximum, "high"
+    return target, {
+        "mode": "adaptive", "score": round(score, 3), "level": level,
+        "scene_count": scene_count, "action_segments": action_count,
+        "ambiguous_segments": ambiguous_count, "acting_segments": acting_count,
+    }
+
+
+def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int = 45,
+                                minimum: int = 30, maximum: int = 60,
+                                segments: list[dict] | None = None) -> dict:
     """Choose a bounded set of frames after text/scene narrowing.
 
     High-priority points come from ambiguous/action candidate shots in the
@@ -43,11 +97,20 @@ def build_selective_visual_plan(folder: Path, *, target: int = 45, minimum: int 
     folder = folder.resolve()
     minimum = max(1, min(int(minimum), 60))
     maximum = max(minimum, min(int(maximum), 60))
-    target = max(minimum, min(int(target), maximum))
-    scene_map = _load(folder / "_scene_map.json")
+    scene_map_path = folder / "_scene_map.json"
+    if not scene_map_path.exists():
+        scene_map_path = folder / "_scene_map.draft.json"
+    scene_map = _load(scene_map_path)
     shot_index = _load(folder / "_source_shot_index.json")
     report = _load(folder / "★ 分层影子匹配报告.json")
     points: list[dict] = []
+    selected_segments = segments if segments is not None else report.get("segments", [])
+    if not selected_segments:
+        selected_segments = _script_segments(folder)
+    target, risk = resolve_visual_target(
+        requested=target, preferred=preferred, minimum=minimum, maximum=maximum,
+        scene_count=len(scene_map.get("scenes", [])), segments=selected_segments,
+    )
 
     # Reviewed manual ranges and action/ambiguous top shots are the most useful
     # places to spend expensive visual calls.
@@ -63,7 +126,7 @@ def build_selective_visual_plan(folder: Path, *, target: int = 45, minimum: int 
                  f"scene-start:{name}", priority=2)
             _add(points, right - min(0.6, max(0.1, (right - left) * 0.08)),
                  f"scene-end:{name}", priority=2)
-    for segment in segments if segments is not None else report.get("segments", []):
+    for segment in selected_segments:
         intent = segment.get("intent") or {}
         candidates = segment.get("candidate_shots") or []
         event_candidates = segment.get("candidate_events") or []
@@ -112,6 +175,7 @@ def build_selective_visual_plan(folder: Path, *, target: int = 45, minimum: int 
     points.sort(key=lambda item: float(item["time"]))
     payload = {"schema": "v1-selective-visual-plan", "mode": "candidate-driven",
                "target": target, "minimum": minimum, "maximum": maximum,
+               "budget": risk, "scene_map_source": scene_map_path.name,
                "frame_count": len(points), "points": points,
                "times": [item["time"] for item in points]}
     (folder / PLAN_FILE).write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
@@ -127,8 +191,10 @@ def visual_index_matches_plan(folder: Path) -> bool:
                for item in index.get("source_signature", [])
                if int(item.get("source_index", 1)) == 1]
     frame_count = int(index.get("frame_count") or len(index.get("frames", [])) or 0)
+    minimum = max(1, int(plan.get("minimum") or 30))
+    maximum = min(60, max(minimum, int(plan.get("maximum") or 60)))
     return bool(
-        30 <= len(times) <= 60
+        minimum <= len(times) <= maximum
         and times == indexed
         and index.get("visual_schema") == "v3-selective-face-720p"
         and frame_count == len(times)

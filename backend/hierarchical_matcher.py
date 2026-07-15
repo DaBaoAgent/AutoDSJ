@@ -343,7 +343,8 @@ def build_shadow_report(folder: Path, matching: object | None = None,
     planning_summary["sequence_decoder"] = sequence_summary
     visual_plan = build_selective_visual_plan(
         folder,
-        target=int(getattr(visual, "selective_target_frames", 45)),
+        target=0,
+        preferred=int(getattr(visual, "selective_target_frames", 45)),
         minimum=int(getattr(visual, "selective_min_frames", 30)),
         maximum=int(getattr(visual, "selective_max_frames", 60)),
         segments=output_segments,

@@ -68,6 +68,29 @@ cd D:\@kaifa\DaobaoAI-DY\project
 
 ### 2. 建立字幕/剧本与物理镜头基础
 
+新集优先使用并行准备命令：
+
+```powershell
+.\.venv\Scripts\python.exe dy.py prepare --folder "D:\自动剪辑\某剧\第N集"
+```
+
+它会并行建立脚本表与物理镜头索引，继续生成事件索引、`_scene_map.draft.json`
+场景草案和自适应视觉复核计划，并以有界并发完成稀疏抽帧及批量视觉识别。视觉预算默认
+按风险在 30/45/60 帧间选择；只有显式传入 `--target-frames N` 才固定帧数。视觉完成后会
+自动把人物/动作描述回填到镜头及事件索引，不会重新检测镜头边界。
+
+场景草案永远保持 `coverage_reviewed=false`，不会覆盖正式 `_scene_map.json`。必须人工核对
+边界、广告排除、名称、人物和父段计划后，另存为 `_scene_map.json` 并设置
+`coverage_reviewed=true`，正式渲染门禁没有放宽。
+
+需要只生成索引和场景草案、不调用视觉模型时：
+
+```powershell
+.\.venv\Scripts\python.exe dy.py prepare --folder "D:\自动剪辑\某剧\第N集" --skip-visual
+```
+
+以下分步命令仍可用于诊断：
+
 ```powershell
 .\.venv\Scripts\python.exe dy.py preflight --folder "D:\自动剪辑\某剧\第N集"
 .\.venv\Scripts\python.exe dy.py script --folder "D:\自动剪辑\某剧\第N集"

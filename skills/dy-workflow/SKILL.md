@@ -203,3 +203,42 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
   修完重跑 `dy.py run --skip-visual --no-render`。注意：仅修正视觉层不会丢失信息——广告区判定仍靠字幕信号（如"唯品会""搜玫瑰"等）正常工作。详细案例见 `references/ad-filter-false-positive-fix.md`。
 
 项目的完整命令与数据结构以 `D:\@kaifa\DaobaoAI-DY\project\README.md` 为准。
+
+## 耗时参考
+
+单集全流程端到端耗时约 **40-80 分钟**，主要瓶颈：
+
+| 阶段 | 耗时 | 备注 |
+|------|------|------|
+| 初始 visual（36帧） | 5-10分钟 | SiliconFlow Qwen VL API |
+| 引导 scaffold（TTS+匹配） | 5-10分钟 | 百炼 TTS 偶尔 SSL 重试 |
+| 场景地图编写 | 1-2分钟 | execute_code 一次性完成 |
+| events + shadow-match | 2-5分钟 | 文本嵌入是主要开销 |
+| 选择性 visual（60帧） | 5-10分钟 | 常超时需续跑或强制完成 |
+| shadow-match 再跑 | 2-3分钟 | |
+| 预跑 + 正式渲染 | 20-40分钟 | TTS 复用缓存 + FFmpeg 编码 |
+
+**多集批量（4集实测）**：串行交错模式，总耗时约 **4-5小时**。
+具体做法：在上一集渲染（FFmpeg 编码约15-30分钟）期间，为下一集做全部准备工作（preflight→visual→script→shots→scaffold→场景地图→events→shadow-match→visual selective），等上一集成片时下一集已就绪可立即开跑。
+
+**常见延时因素**：
+- 视觉 API 超时（SiliconFlow 429/500），重试可续跑
+- 百炼 TTS SSL EOF 错误，管线内置重试自动恢复
+- 广告关键词误封需手动清洗 `_source_visual_index.json` 后重跑
+
+## 新集并行准备（2026-07）
+
+新集默认先运行：
+
+```powershell
+$PY dy.py prepare --folder "<单集文件夹>"
+```
+
+该命令并行建立脚本表与物理镜头索引，生成事件索引、
+`_scene_map.draft.json` 和风险自适应的 30/45/60 帧视觉计划，再以有界并发执行
+稀疏抽帧和批量视觉识别。视觉完成后自动把识别证据回填到镜头/事件索引，不重跑镜头边界。
+
+草案始终为 `coverage_reviewed=false`，不得直接用于正式成片。人工核对完整覆盖、场景边界、
+广告排除和父段计划后，另存为 `_scene_map.json` 并设置 `coverage_reviewed=true`。
+只生成索引和草案时使用 `dy.py prepare --skip-visual`；显式固定视觉预算时使用
+`--target-frames 30..60`，否则保持风险自适应。

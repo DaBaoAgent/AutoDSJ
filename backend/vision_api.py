@@ -6,6 +6,7 @@ import re
 import subprocess
 import urllib.request
 from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -178,22 +179,45 @@ def _extract_frames(video: Path, out_dir: Path, interval: float, prefix: str,
 
 def _extract_frames_at_times(video: Path, out_dir: Path, times: list[float], prefix: str,
                              *, width: int = 480, height: int = 270,
-                             jpeg_q: int = 5) -> list[FrameSample]:
-    """Extract an irregular, candidate-driven frame set with fast input seeks."""
+                             jpeg_q: int = 5, workers: int = 1) -> list[FrameSample]:
+    """Extract an irregular frame set with bounded parallel input seeks.
+
+    Sparse candidate frames are normally far apart.  Running a small number of
+    independent seeks in parallel hides process startup and storage latency while
+    preserving the exact requested timestamps and deterministic output order.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    samples: list[FrameSample] = []
     width = max(320, int(width))
     height = max(180, int(height))
     scale = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
              f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2")
-    for index, value in enumerate(sorted(set(round(float(x), 3) for x in times)), 1):
+    values = sorted(set(round(float(x), 3) for x in times))
+
+    def extract_one(index: int, value: float) -> FrameSample | None:
         image = out_dir / f"{prefix}_{index:06d}.jpg"
         _run([ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{value:.3f}",
               "-i", str(video), "-frames:v", "1", "-vf", scale,
               "-q:v", str(max(2, min(8, int(jpeg_q)))), str(image)], timeout=120)
         if image.exists():
-            samples.append(FrameSample(value, 0, image.name, str(image)))
-    return samples
+            return FrameSample(value, 0, image.name, str(image))
+        return None
+
+    worker_count = max(1, min(6, int(workers or 1), len(values) or 1))
+    if worker_count == 1:
+        samples = [extract_one(index, value) for index, value in enumerate(values, 1)]
+    else:
+        completed: dict[int, FrameSample] = {}
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(extract_one, index, value): index
+                for index, value in enumerate(values, 1)
+            }
+            for future in as_completed(futures):
+                sample = future.result()
+                if sample is not None:
+                    completed[futures[future]] = sample
+        samples = [completed[index] for index in sorted(completed)]
+    return [sample for sample in samples if sample is not None]
 
 
 def _clean_model_json(text: str) -> object:

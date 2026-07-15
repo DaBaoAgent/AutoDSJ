@@ -129,7 +129,8 @@ def _run_visual(settings: AppSettings, *, force: bool, interval: float = 0.0, wo
         vis = settings.visual
         plan = build_selective_visual_plan(
             folder,
-            target=target_frames or vis.selective_target_frames,
+            target=target_frames,
+            preferred=vis.selective_target_frames,
             minimum=vis.selective_min_frames,
             maximum=vis.selective_max_frames,
         )
@@ -265,6 +266,28 @@ def cmd_deliver(args: argparse.Namespace) -> None:
     print(f"  交付清单：{report['delivery_report_file']}")
 
 
+def cmd_quality(args: argparse.Namespace) -> None:
+    """独立质检命令：可随时对成片进行质量审计。"""
+    settings = _resolve_settings(args.folder)
+    folder = Path(settings.material_folder)
+    from scripts.audit_quality import audit_episode, suggest_fixes
+    report = audit_episode(folder)
+    print(f"质检完成：{folder / '_quality_audit.json'}")
+    print(f"  总分镜：{report['stats'].get('total_narration', 0)}")
+    print(f"  CRITICAL: {report['critical_count']}")
+    print(f"  HIGH:     {report['high_count']}")
+    print(f"  WARNING:  {report['warning_count']}")
+    print(f"  PASS:     {report['pass']}")
+    if args.fix:
+        print("\n修复建议：")
+        for s in suggest_fixes(report):
+            print(f"  {s}")
+    for issue in report["issues"]:
+        if issue["severity"] == "CRITICAL":
+            m, s = divmod(issue["output_time"], 60)
+            print(f"  ❌ [{int(m)}:{int(s):02d}] {issue['detail'][:120]}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     save_settings(settings)
@@ -319,6 +342,32 @@ def cmd_run(args: argparse.Namespace) -> None:
     output = runner.render(settings, on_line=lambda line: print(f"  {line}"), concurrency=args.concurrency,
                            hierarchical_match=args.hierarchical_match)
     print(f"\n成片完成：{output}")
+
+    # ── 成片质检 ──
+    if not getattr(args, "skip_quality", False):
+        from scripts.audit_quality import audit_episode, suggest_fixes
+        print("\n[质检] 比对解说与画面匹配精准度…")
+        try:
+            report = audit_episode(folder)
+            crit = report["critical_count"]
+            high = report["high_count"]
+            warn = report["warning_count"]
+            print(f"  CRITICAL: {crit}  HIGH: {high}  WARNING: {warn}")
+            if crit > 0:
+                print("  ❌ 发现严重问题（片尾/广告误入），请修复后重跑。")
+                for issue in report["issues"]:
+                    if issue["severity"] == "CRITICAL":
+                        m, s = divmod(issue["output_time"], 60)
+                        print(f"    [{int(m)}:{int(s):02d}] {issue['detail'][:100]}")
+                print("\n  修复建议：")
+                for s in suggest_fixes(report):
+                    print(f"    {s}")
+            elif high > 0:
+                print(f"  ⚠ {high} 处人物缺失/语义冲突，建议手动复核。")
+            else:
+                print("  ✅ 质检通过")
+        except Exception as exc:
+            print(f"  ⚠ 质检失败：{exc}")
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -502,6 +551,50 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_prepare(args: argparse.Namespace) -> None:
+    """Prepare a new episode through the parallel first-run index path."""
+    settings = _resolve_settings(args.folder)
+    save_settings(settings)
+    folder = Path(settings.material_folder)
+    from backend.index_pipeline import prepare_core_indexes, refresh_visual_evidence
+
+    print("═══ DY 新集并行准备 ═══")
+    print("[1/3] 并行建立物理镜头索引与脚本表", flush=True)
+    prepared = prepare_core_indexes(
+        folder, settings, force=args.force, target_frames=args.target_frames,
+    )
+    plan = prepared["visual_plan"]
+    budget = plan.get("budget") or {}
+    print(f"  镜头 {prepared['shot_index'].get('shot_count', 0)} · "
+          f"事件 {prepared['event_index'].get('event_count', 0)} · "
+          f"解说 {prepared['script_table'].get('narration_count', 0)}")
+    print(f"[2/3] 场景来源 {prepared['scene_source']} · "
+          f"{prepared['scene_map'].get('scene_count', 0)} 个场景")
+    print(f"  自适应视觉预算 {plan.get('frame_count', 0)} 帧 · "
+          f"风险 {budget.get('level', 'manual')} ({budget.get('score', '-')})")
+
+    if args.skip_visual:
+        print("[3/3] 已按 --skip-visual 跳过视觉识别")
+    else:
+        print("[3/3] 并行抽帧 + 批量视觉识别", flush=True)
+        _run_visual(
+            settings,
+            force=args.force,
+            interval=0,
+            workers=args.workers,
+            target_frames=args.target_frames,
+        )
+        refreshed = refresh_visual_evidence(folder, prepared["scene_map"].get("scenes", []))
+        print(f"  视觉证据已回填：镜头 {refreshed['shot_index'].get('shot_count', 0)} · "
+              f"事件 {refreshed['event_index'].get('event_count', 0)}")
+
+    if prepared["scene_source"].endswith(".draft.json"):
+        print(f"\n场景图草案：{folder / prepared['scene_source']}")
+        print("请核对后另存为 _scene_map.json，并将 coverage_reviewed 设置为 true；正式门禁未放宽。")
+    else:
+        print("\n正式场景图已存在，新集准备完成。")
+
+
 def cmd_concurrency(args: argparse.Namespace) -> None:
     from backend.concurrency import detect_optimal_concurrency, get_concurrency, set_concurrency
     if args.set:
@@ -614,13 +707,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--force-visual", action="store_true", help="强制重跑视觉识别（清空重来）")
     p_run.add_argument("--resume", action="store_true", help="续跑视觉识别：复用已识别帧，只重试失败帧")
     p_run.add_argument("--skip-visual", action="store_true", help="跳过视觉识别（需已有索引）")
-    p_run.add_argument("--target-frames", type=int, default=45,
-                       help="选择性视觉复核帧数（30-60，默认45）")
+    p_run.add_argument("--target-frames", type=int, default=0,
+                       help="选择性视觉复核帧数（30-60；默认0=按风险自动选择）")
     p_run.add_argument("--workers", type=int, default=3, help="视觉识别并发批数（默认3）")
     p_run.add_argument("--concurrency", type=int, default=None, help="渲染并发（覆盖，跳过基准）")
     p_run.add_argument("--no-render", action="store_true", help="只做匹配并写匹配报告/字幕，不成片")
     p_run.add_argument("--hierarchical-match", action="store_true",
                        help="使用已验证的 ★ 分层接管预演报告 覆盖正式解说画面")
+    p_run.add_argument("--skip-quality", action="store_true",
+                       help="跳过成片后的质检步骤")
     p_run.set_defaults(func=cmd_run)
 
     p_detect = sub.add_parser("detect", help="检测素材（原片/字幕/文案）")
@@ -631,12 +726,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre.add_argument("--folder")
     p_pre.set_defaults(func=cmd_preflight)
 
-    p_visual = sub.add_parser("visual", help="候选驱动视觉复核（默认45帧，硬限制30-60）")
+    p_prepare = sub.add_parser("prepare", help="新集加速准备：并行索引→场景草案→自适应视觉复核")
+    p_prepare.add_argument("--folder")
+    p_prepare.add_argument("--force", action="store_true", help="强制重建索引、草案和视觉结果")
+    p_prepare.add_argument("--skip-visual", action="store_true", help="只建索引和场景草案")
+    p_prepare.add_argument("--target-frames", type=int, default=0,
+                           help="视觉帧数（30-60；默认0=按风险自动选择）")
+    p_prepare.add_argument("--workers", type=int, default=3,
+                           help="抽帧与视觉识别并发（默认3）")
+    p_prepare.set_defaults(func=cmd_prepare)
+
+    p_visual = sub.add_parser("visual", help="候选驱动视觉复核（风险自适应30/45/60帧）")
     p_visual.add_argument("--folder")
     p_visual.add_argument("--force", action="store_true", help="强制重跑（清空重来）")
     p_visual.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应/复用）")
-    p_visual.add_argument("--target-frames", type=int, default=45,
-                          help="选择性视觉复核帧数（30-60，默认45）")
+    p_visual.add_argument("--target-frames", type=int, default=0,
+                          help="选择性视觉复核帧数（30-60；默认0=按风险自动选择）")
     p_visual.add_argument("--workers", type=int, default=3, help="并发批数（默认3）")
     p_visual.set_defaults(func=cmd_visual)
 
@@ -671,6 +776,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_deliver = sub.add_parser("deliver", help="为已有成片生成发布信息/剪映字幕并执行交付校验")
     p_deliver.add_argument("--folder")
     p_deliver.set_defaults(func=cmd_deliver)
+
+    p_quality = sub.add_parser("quality", help="成片质检：比对解说与画面匹配精准度")
+    p_quality.add_argument("--folder")
+    p_quality.add_argument("--fix", action="store_true", help="输出修复建议")
+    p_quality.set_defaults(func=cmd_quality)
 
     p_status = sub.add_parser("status", help="查看当前工作流进度")
     p_status.add_argument("--folder")

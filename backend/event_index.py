@@ -60,10 +60,11 @@ def group_event_shots(shots: list[dict], scenes: list[dict], *, target: float = 
     return groups
 
 
-def build_event_index(folder: Path, *, force: bool = False) -> dict:
+def build_event_index(folder: Path, *, force: bool = False, shot_index: dict | None = None,
+                      scenes: list[dict] | None = None) -> dict:
     folder = folder.resolve()
-    shot_index = build_shot_index(folder, force=False)
-    scenes = _load_scenes(folder)
+    shot_index = shot_index or build_shot_index(folder, force=False)
+    scenes = _load_scenes(folder) if scenes is None else scenes
     groups = group_event_shots(shot_index.get("shots", []), scenes)
     events = []
     for index, shots in enumerate(groups, 1):

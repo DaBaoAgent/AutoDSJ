@@ -71,6 +71,21 @@ def _load_visual_frames(folder: Path) -> list[dict]:
         return []
 
 
+def _visual_signature(frames: list[dict]) -> str:
+    """Fingerprint the evidence attached to shots without hashing image files."""
+    compact = [
+        (
+            str(item.get("frame_id") or ""),
+            round(float(item.get("time", 0)), 3),
+            str(item.get("caption") or ""),
+            str(item.get("people") or ""),
+        )
+        for item in frames
+    ]
+    raw = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
 def _nearest_frames(frames: list[dict], times: list[float], tolerance: float = 5.0) -> list[dict]:
     if not frames:
         return []
@@ -98,10 +113,14 @@ def build_shot_index(folder: Path, *, threshold: float = 8.0, force: bool = Fals
     video = Path(media.video_path)
     output = folder / "_source_shot_index.json"
     signature = _fingerprint(video)
+    visual_frames = _load_visual_frames(folder)
+    visual_signature = _visual_signature(visual_frames)
     if output.exists() and not force:
         try:
             cached = json.loads(output.read_text("utf-8"))
-            if cached.get("schema") == SHOT_SCHEMA and cached.get("signature") == signature:
+            if (cached.get("schema") == SHOT_SCHEMA
+                    and cached.get("signature") == signature
+                    and cached.get("visual_signature") == visual_signature):
                 return cached
         except (OSError, ValueError):
             pass
@@ -120,7 +139,6 @@ def build_shot_index(folder: Path, *, threshold: float = 8.0, force: bool = Fals
         boundary_cache.write_text(json.dumps({"schema": SHOT_SCHEMA, "signature": signature,
                                   "threshold": threshold, "boundaries": boundaries},
                                   ensure_ascii=False, indent=2), "utf-8")
-    visual_frames = _load_visual_frames(folder)
     subtitles = parse_srt(Path(media.subtitle_paths[0])) if media.subtitle_paths else []
     shots = []
     for index, (start, end) in enumerate(zip(boundaries, boundaries[1:]), 1):
@@ -137,6 +155,7 @@ def build_shot_index(folder: Path, *, threshold: float = 8.0, force: bool = Fals
                           {key: frame.get(key) for key in ("frame_id", "time", "caption", "people",
                            "scene", "action", "props", "identified")} for frame in evidence]})
     payload = {"schema": SHOT_SCHEMA, "signature": signature, "video": video.name,
+               "visual_signature": visual_signature,
                "duration": media.duration, "threshold": threshold,
                "shot_count": len(shots), "shots": shots}
     temp = output.with_suffix(".json.tmp")
