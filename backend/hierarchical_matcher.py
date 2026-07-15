@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from backend.event_index import build_event_index
+from backend.candidate_visual_review import apply_candidate_reviews, run_candidate_visual_review
 from backend.embed_match import dashscope_key
 from backend.narration_intent import ACTION_VOCAB, parse_intent
 from backend.sequence_decoder import decode_parent_sequences
@@ -139,10 +140,25 @@ def _containing_scene_range(start: float, end: float, hint: dict | None) -> tupl
 
 
 def build_shadow_report(folder: Path, matching: object | None = None,
-                        visual: object | None = None) -> dict:
+                        visual: object | None = None, api: object | None = None) -> dict:
     folder = folder.resolve()
     old = _load(folder / "★ 匹配报告.json")
     scene_map = validate_scene_map(folder, old.get("segments", []))
+    # Once a complete generic cloud plan exists, keep it stable.  Its visual
+    # captions can legitimately change text ranking; rebuilding the plan from
+    # those new rankings would create an endless plan -> index -> plan loop.
+    # A reviewed scene-map change is the exception and deliberately invalidates
+    # the lock so the generic coverage can be rebuilt.
+    existing_visual_plan = _load(folder / "_selective_visual_plan.json")
+    plan_scene_sha = str(existing_visual_plan.get("scene_map_sha256") or "")
+    visual_plan_ready_before = (
+        visual_index_matches_plan(folder)
+        and (not plan_scene_sha or plan_scene_sha == scene_map["sha256"])
+    )
+    if visual_plan_ready_before and not plan_scene_sha:
+        existing_visual_plan["scene_map_sha256"] = scene_map["sha256"]
+        (folder / "_selective_visual_plan.json").write_text(
+            json.dumps(existing_visual_plan, ensure_ascii=False, indent=2), "utf-8")
     event_index = build_event_index(folder)
     shot_index = _load(folder / "_source_shot_index.json")
     shots = {item["shot_id"]: item for item in shot_index.get("shots", [])}
@@ -330,6 +346,44 @@ def build_shadow_report(folder: Path, matching: object | None = None,
                     "shot_end": manual_end, "allow_reuse": True})
         result["_planning_candidates"] = planning
         output_segments.append(result)
+    visual_plan = (existing_visual_plan if visual_plan_ready_before else
+                   build_selective_visual_plan(
+                       folder,
+                       target=0,
+                       preferred=int(getattr(visual, "selective_target_frames", 90)),
+                       minimum=int(getattr(visual, "selective_min_frames", 60)),
+                       maximum=int(getattr(visual, "selective_max_frames", 120)),
+                       segments=output_segments,
+                   ))
+    if not visual_plan.get("scene_map_sha256"):
+        visual_plan["scene_map_sha256"] = scene_map["sha256"]
+        (folder / "_selective_visual_plan.json").write_text(
+            json.dumps(visual_plan, ensure_ascii=False, indent=2), "utf-8")
+    visual_review_ready = visual_index_matches_plan(folder)
+    candidate_enabled = bool(getattr(matching, "use_candidate_visual_review", True))
+    candidate_summary = {
+        "status": "disabled" if not candidate_enabled else "pending_visual_index",
+        "task_count": 0, "reviewed": 0, "accepted": 0, "unresolved": 0,
+        "unresolved_segment_ids": [], "cache_hit": False,
+    }
+    if candidate_enabled and visual_review_ready:
+        try:
+            candidate_payload = run_candidate_visual_review(
+                folder, output_segments, scene_map, matching, visual,
+                model=str(getattr(api, "visual_model", "qwen3.7-plus") or "qwen3.7-plus"),
+            )
+            candidate_summary = apply_candidate_reviews(output_segments, candidate_payload)
+        except Exception as exc:  # candidate review must fail closed without aborting shadow-match
+            candidate_summary = {
+                "status": "unavailable", "task_count": 1, "reviewed": 0,
+                "accepted": 0, "unresolved": 1, "unresolved_segment_ids": [],
+                "cache_hit": False, "error": str(exc),
+            }
+    candidate_review_ready = (
+        not candidate_enabled
+        or (candidate_summary.get("status") == "complete" and candidate_summary.get("unresolved", 0) == 0)
+    )
+
     source_blocked = [(float(item.get("clip_start", 0)), float(item.get("clip_end", 0)))
                       for item in old.get("segments", []) if item.get("row_type") == "source_clip"]
     ad_blocked: list[tuple[float, float]] = []
@@ -341,16 +395,12 @@ def build_shadow_report(folder: Path, matching: object | None = None,
     sequence_summary = decode_parent_sequences(output_segments)
     planning_summary = plan_timeline(output_segments, source_blocked, hard_blocked=ad_blocked)
     planning_summary["sequence_decoder"] = sequence_summary
-    visual_plan = build_selective_visual_plan(
-        folder,
-        target=0,
-        preferred=int(getattr(visual, "selective_target_frames", 90)),
-        minimum=int(getattr(visual, "selective_min_frames", 60)),
-        maximum=int(getattr(visual, "selective_max_frames", 120)),
-        segments=output_segments,
-    )
-    visual_review_ready = visual_index_matches_plan(folder)
     planning_summary["visual_review_ready"] = visual_review_ready
+    planning_summary["candidate_visual_review"] = candidate_summary
+    planning_summary["candidate_visual_review_ready"] = candidate_review_ready
+    planning_summary["total_unresolved"] = (
+        int(planning_summary.get("unresolved") or 0) + int(candidate_summary.get("unresolved") or 0)
+    )
     payload = {"mode": "shadow", "source_report": "★ 匹配报告.json",
                "matcher_schema": "v3-hybrid-text-campplus-viterbi",
                "evidence_summary": {
@@ -361,7 +411,8 @@ def build_shadow_report(folder: Path, matching: object | None = None,
                    "voice_schema": voice_index.get("schema"),
                },
                "visual_plan": {"frame_count": visual_plan.get("frame_count"),
-                               "ready": visual_review_ready},
+                               "ready": visual_review_ready,
+                               "candidate_review_ready": candidate_review_ready},
                "planning_summary": planning_summary, "segments": output_segments}
     (folder / "★ 分层影子匹配报告.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
@@ -387,7 +438,8 @@ def build_shadow_report(folder: Path, matching: object | None = None,
         planned["clip_end"] = item.get("planned_clip_end")
         planned_segments.append(planned)
     takeover = {"mode": "takeover-preview",
-                "safe_to_render": planning_summary["unresolved"] == 0 and visual_review_ready,
+                "safe_to_render": (planning_summary["total_unresolved"] == 0
+                                   and visual_review_ready and candidate_review_ready),
                 "scene_map_sha256": scene_map["sha256"],
                 "planning_summary": planning_summary, "segments": planned_segments}
     (folder / "★ 分层接管预演报告.json").write_text(

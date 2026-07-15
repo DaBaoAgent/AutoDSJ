@@ -223,6 +223,7 @@ def _annotate_source_frames(
     workers: int = 1,
     force: bool = False,
     identity_map: "dict | None" = None,
+    cached_visual: "dict | None" = None,
 ) -> dict:
     visual_file = folder / SOURCE_VISUAL_FILE
     source_signature = [
@@ -234,8 +235,8 @@ def _annotate_source_frames(
         }
         for item in records
     ]
-    if visual_file.exists() and not force:
-        cached = _read_json(visual_file)
+    cached = cached_visual if isinstance(cached_visual, dict) else _read_json(visual_file)
+    if cached and not force:
         if (
             cached.get("model") == model
             and cached.get("frame_interval") == frame_interval
@@ -248,7 +249,6 @@ def _annotate_source_frames(
             return cached
 
     cached_frames: dict[str, dict] = {}
-    cached = _read_json(visual_file)
     if cached.get("model") == model and cached.get("visual_schema") == VISUAL_SCHEMA:
         cached_frames = {
             str(item.get("frame_id")): item
@@ -628,6 +628,10 @@ def build_source_index(
     subtitle_records = []
     frame_records: list[dict] = []
     extraction_futures = []
+    # Progress updates intentionally replace the public index while a run is in
+    # flight.  Keep the last completed payload in memory first, otherwise a
+    # resume would erase its own frame cache before annotation starts.
+    previous_visual_index = _read_json(folder / SOURCE_VISUAL_FILE) if enable_visual_model else {}
 
     with tempfile.TemporaryDirectory(prefix="daobaoai_dy_source_") as temp_root, \
             ThreadPoolExecutor(max_workers=max(1, min(3, len(video_paths)))) as extraction_pool:
@@ -754,6 +758,7 @@ def build_source_index(
                 workers=visual_workers,
                 force=force_visual,
                 identity_map=identity_map,
+                cached_visual=previous_visual_index,
             )
         else:
             visual_index = _blank_visual_index(frame_records, model, frame_interval)

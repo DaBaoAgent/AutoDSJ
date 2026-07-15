@@ -371,6 +371,44 @@ def _call_bailian_vision(api_key: str, model: str, api_url: str,
     return _parse_vision_content(body["choices"][0]["message"]["content"], batch)
 
 
+def _call_bailian_multimodal_json(api_key: str, model: str, prompt: str,
+                                   images: list[dict], *, timeout: int = 240) -> dict:
+    """Run a bounded custom image review and require one JSON object.
+
+    ``images`` items contain ``image_path`` and a short ``label`` that is placed
+    immediately before the corresponding image.  Business-specific validation
+    remains in the caller so the generic visual indexing path is unchanged.
+    """
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for item in images:
+        content.append({"type": "text", "text": str(item.get("label") or "image")})
+        image_data = b64encode(Path(item["image_path"]).read_bytes()).decode("ascii")
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64," + image_data},
+        })
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.0,
+        "max_tokens": 6000,
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        _dashscope_compatible_url(), data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = json.loads(response.read().decode("utf-8", errors="replace"))
+    raw = body["choices"][0]["message"]["content"]
+    if isinstance(raw, list):
+        raw = "".join(str(item.get("text") or "") if isinstance(item, dict) else str(item)
+                      for item in raw)
+    parsed = _clean_model_json(str(raw))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("视觉候选复核没有返回 JSON 对象")
+    return parsed
+
+
 def _call_siliconflow_vision(api_key: str, model: str, api_url: str,
                              batch: list[dict], timeout: int = 240) -> list[dict]:
     return _call_bailian_vision(api_key, model, api_url, batch, timeout)

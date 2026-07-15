@@ -67,6 +67,43 @@ class SelectiveVisualTests(unittest.TestCase):
             (folder / "_source_visual_index.json").write_text(json.dumps(index), "utf-8")
             self.assertTrue(visual_index_matches_plan(folder))
 
+    def test_action_candidates_get_burst_frames_inside_scene(self):
+        with tempfile.TemporaryDirectory() as value:
+            folder = Path(value)
+            (folder / "_scene_map.json").write_text(json.dumps({
+                "scenes": [{"name": "泳池", "ranges": [[100, 130]]}]
+            }, ensure_ascii=False), "utf-8")
+            (folder / "_source_shot_index.json").write_text(
+                json.dumps({"duration": 140, "shots": []}), "utf-8")
+            segments = [{
+                "segment_id": "seg-1",
+                "scene_hint": "泳池",
+                "intent": {"actions": ["推入泳池"], "temporal_type": "action_sequence",
+                           "requires_candidate_review": True},
+                "candidate_events": [{"score": 0.51}, {"score": 0.49}],
+                "candidate_shots": [{"shot_id": "shot-1", "range": [105, 115]}],
+            }]
+            plan = build_selective_visual_plan(
+                folder, target=60, minimum=60, maximum=120, segments=segments)
+            burst = [point for point in plan["points"] if point["reason"].startswith("candidate-burst:")]
+            self.assertEqual([point["time"] for point in burst], [107.0, 110.0, 113.0])
+            self.assertTrue(all(100 <= point["time"] <= 130 for point in burst))
+
+    def test_plan_does_not_sample_outside_configured_source_trim(self):
+        with tempfile.TemporaryDirectory() as value:
+            folder = Path(value)
+            (folder / "_scene_map.json").write_text(json.dumps({
+                "scenes": [{"name": "片头", "ranges": [[0, 200]]},
+                           {"name": "正片", "ranges": [[200, 500]]}]
+            }, ensure_ascii=False), "utf-8")
+            (folder / "_source_shot_index.json").write_text(
+                json.dumps({"duration": 500, "shots": []}), "utf-8")
+            (folder / "_source_subtitle_index.json").write_text(json.dumps({
+                "sources": [{"trim_start": 144, "trim_end": 460}]
+            }), "utf-8")
+            plan = build_selective_visual_plan(folder, target=60, minimum=60, maximum=120)
+            self.assertTrue(all(144 <= value <= 460 for value in plan["times"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -213,7 +213,7 @@ def cmd_shadow_match(args: argparse.Namespace) -> None:
     settings = _resolve_settings(args.folder)
     from backend.hierarchical_matcher import build_shadow_report
     folder = Path(settings.material_folder)
-    result = build_shadow_report(folder, settings.matching, settings.visual)
+    result = build_shadow_report(folder, settings.matching, settings.visual, settings.api)
     print(f"分层影子匹配完成：{len(result.get('segments', []))} 个解说分镜"
           f" → {folder / '★ 分层影子匹配报告.json'}")
     print(f"新旧并排对比 → {folder / '★ 新旧匹配并排对比.json'}")
@@ -222,6 +222,17 @@ def cmd_shadow_match(args: argparse.Namespace) -> None:
     state = "ready" if visual_plan.get("ready") else "pending dy visual + shadow-match"
     print(f"  selective visual review: {visual_plan.get('frame_count', 0)} frames ({state})"
           f" -> {folder / '_selective_visual_plan.json'}")
+    candidate = summary.get("candidate_visual_review", {})
+    print(f"  candidate compare: {candidate.get('status', 'pending')} | "
+          f"accepted {candidate.get('accepted', 0)} / unresolved {candidate.get('unresolved', 0)}"
+          f" -> {folder / '_candidate_visual_review.json'}")
+    formal_ready = bool(
+        summary.get("total_unresolved", summary.get("unresolved", 0)) == 0
+        and summary.get("visual_review_ready")
+        and summary.get("candidate_visual_review_ready")
+    )
+    print(f"  formal render gate: {'READY' if formal_ready else 'BLOCKED'} | "
+          f"total unresolved {summary.get('total_unresolved', summary.get('unresolved', 0))}")
     print(f"接管预演：就绪 {summary.get('ready', 0)} / 未解决 {summary.get('unresolved', 0)}"
           f" → {folder / '★ 分层接管预演报告.json'}")
 

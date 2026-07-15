@@ -2,7 +2,7 @@
 
 ## 正式数据流
 
-`SRT＋场景图＋审校剧本 → 事件文本索引 → BM25＋text-embedding-v4 → CAM++可选声纹 → 父段Viterbi → 候选驱动视觉复核`
+`SRT＋场景图＋审校剧本 → 结构化视觉意图 → 事件文本索引 → BM25＋text-embedding-v4 → CAM++可选声纹 → 父段Viterbi → 60～120帧通用复核 → 候选多帧对比`
 
 ## 文本主检索
 
@@ -39,3 +39,13 @@
 - `planning_summary.unresolved == 0`。
 - `60 <= _selective_visual_plan.json.frame_count <= 120`。
 - 第二次相同内容重匹配应命中两类文本向量缓存；若仍慢，先查缓存签名而不是增加视觉帧。
+
+## 候选多帧硬确认
+
+- `narration_intent.py` 输出 `must_have`、`must_not_have`、`hard_requirements` 和 `temporal_type`。检索同义词不能自动升级为硬动作，尤其禁止把关系/心理隐喻当成可见动作。
+- `selective_visual.py` 对明确动作候选优先加入前/中/后三帧；所有时间点必须在 source trim 和场景地图范围内。
+- 完成的通用视觉计划必须按场景地图 SHA 锁定，避免视觉描述改变排序后产生“计划→索引→新计划”的循环失效；人工更新场景地图时锁定自动失效。
+- `candidate_visual_review.py` 在场景内比较最多三个候选；候选只有一个时仍可做硬确认，不得向相邻场景扩窗凑数。
+- 角色名只取 InsightFace `known_people`。云端返回的姓名不能满足角色硬条件；角色、动作、地点、道具、否定项和最低置信度必须全部通过。
+- `_candidate_visual_review.json` 对完整签名缓存；远端失败形成 `partial` 时，下次只抽取和重试失败组。
+- 候选复核未完成或存在 `unresolved` 时，命令可以正常结束，但 `safe_to_render` 必须为 false。

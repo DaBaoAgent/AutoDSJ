@@ -86,6 +86,13 @@ class MatchingSettings(BaseModel):
     use_voice_evidence: bool = True
     voice_similarity_threshold: float = Field(0.48, ge=0.20, le=0.90)
     max_event_candidates: int = Field(8, ge=3, le=20)
+    use_candidate_visual_review: bool = True
+    candidate_review_max_segments: int = Field(12, ge=0, le=24)
+    candidate_review_candidates: int = Field(3, ge=2, le=4)
+    candidate_review_frames: int = Field(3, ge=1, le=3)
+    candidate_review_min_confidence: float = Field(0.72, ge=0.5, le=0.95)
+    candidate_review_timeout_seconds: int = Field(240, ge=30, le=600)
+    candidate_review_workers: int = Field(2, ge=1, le=2)
 
 
 class AppSettings(BaseModel):
