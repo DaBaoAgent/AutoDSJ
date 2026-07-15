@@ -25,9 +25,9 @@
 - `backend/timeline_planner.py` 强优先 `sequence_selected` 候选；只有时长不足或素材冲突时才回退次选。
 - 场景地图仍是最高硬约束：主场景整段连续，只有更短尾句组可承上启下。
 
-## 30～60帧选择性复核
+## 60～120帧选择性云端复核
 
-- `shadow-match` 生成 `_selective_visual_plan.json`；默认45帧，最少30、最多60。
+- `shadow-match` 生成 `_selective_visual_plan.json`；默认90帧，最少60、最多120。
 - 优先复核动作/非说话状态、Top-2事件分差小的歧义镜头和人工范围；同时为每个完整大场景至少保留中心覆盖点。
 - `autodsj.py visual` 按不规则时间点抽帧。计划时间与 `_source_visual_index.json.source_signature` 不一致时，旧索引自动判过期。
 - 禁止把 `--interval` 密集抽帧用于正式链路；它只可用于明确的诊断实验。
@@ -37,5 +37,5 @@
 - `★ 分层影子匹配报告.json.matcher_schema == v3-hybrid-text-campplus-viterbi`。
 - `planning_summary.sequence_decoder.decoded_groups == total_groups`。
 - `planning_summary.unresolved == 0`。
-- `30 <= _selective_visual_plan.json.frame_count <= 60`。
+- `60 <= _selective_visual_plan.json.frame_count <= 120`。
 - 第二次相同内容重匹配应命中两类文本向量缓存；若仍慢，先查缓存签名而不是增加视觉帧。

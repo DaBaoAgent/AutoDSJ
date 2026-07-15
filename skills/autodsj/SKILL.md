@@ -1,6 +1,6 @@
 ---
 name: autodsj
-description: Windows 上的 AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和30～60帧选择性视觉复核。
+description: Windows 上的 AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和60～120帧选择性云端视觉复核。
 ---
 
 # AutoDSJ 工作流
@@ -85,13 +85,13 @@ $PY = ".\.venv\Scripts\python.exe"
 ```powershell
 & $PY autodsj.py events --folder "<单集素材夹>"
 & $PY autodsj.py shadow-match --folder "<单集素材夹>"
-& $PY autodsj.py visual --folder "<单集素材夹>" --target-frames 45
+& $PY autodsj.py visual --folder "<单集素材夹>" --target-frames 90
 & $PY autodsj.py shadow-match --folder "<单集素材夹>"
 ```
 
 固定层级：`大场景 → 连续事件块 → 物理镜头 → 动作瞬间`。
 
-固定证据顺序：SRT/审校剧本 BM25 → 文本向量 → 可选 CAM++ 角色声纹 → 父段 Viterbi 全局序列 → 30～60 帧选择性视觉复核。所有证据只能在父场景内排序，不能将镜头拉到场景外。详细契约见 `references/hybrid-evidence-matching.md`。
+固定证据顺序：SRT/审校剧本 BM25 → 文本向量 → 可选 CAM++ 角色声纹 → 父段 Viterbi 全局序列 → 60～120 帧选择性云端视觉复核。所有证据只能在父场景内排序，不能将镜头拉到场景外。详细契约见 `references/hybrid-evidence-matching.md`。
 
 时间线固定使用两轮分配：第一轮在全部候选中选择全局未用画面；只有第一轮完全无解时，父段计划才允许第二轮复用已引用的原片对白画面。`planning_summary.strict_fresh` 应尽量等于解说镜头数，`source_reuse_fallback` 应为 0 或极小。广告区在两轮中都是绝对硬禁区，父段计划、人工 override 和复用降级均不得绕过。
 
@@ -172,7 +172,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 - 整段乱跳：先查 `_scene_map.json` 和 `parent_scene_plans`，不要扩大时间窗。
 - 人物错：检查父场景是否选错，再补人脸参考照。
 - 动作错：检查事件块、物理镜头的多关键帧和 SRT，不得跳出父场景找高分帧。
-- 改了文案：重跑脚本表与 `shadow-match`。若新的 `_selective_visual_plan.json` 使视觉索引过期，再跑默认 `visual`（仍只有30～60帧），不要恢复密集全片扫描。
+- 改了文案：重跑脚本表与 `shadow-match`。若新的 `_selective_visual_plan.json` 使视觉索引过期，再跑默认 `visual`（仍只有60～120帧），不要恢复密集全片扫描。
 - 匹配慢：先检查 `_event_text_embeddings.json` 和 `_query_text_embeddings.json` 是否存在；内容不变时第六集93镜实测重匹配约7秒。
 - 多集任务：串行渲染，不要同时吃满笔记本 CPU/内存/磁盘。
 - **场景地图覆盖空洞**：`validate_scene_map` 报 `覆盖存在空洞` 时，常见原因：(a) `coverage_ranges` 包含了没有视觉帧的广告区间——把广告区从 `coverage_ranges` 移除，或拆成多段 `[[150, 978], [1001, 2668]]`；(b) 某场景 `ranges` 结尾与下个场景开头有间隔——逐场景检查 `scenes[].ranges` 的连续性，确保相邻场景首尾相接（允许广告区打断）。`excluded_ranges` 不影响覆盖校验，只影响匹配，广告区必须从 `coverage_ranges` 移出而非只写在 `excluded_ranges`。
@@ -235,7 +235,7 @@ $PY autodsj.py prepare --folder "<单集文件夹>"
 ```
 
 该命令并行建立脚本表与物理镜头索引，生成事件索引、
-`_scene_map.draft.json` 和风险自适应的 30/45/60 帧视觉计划，再以有界并发执行
+`_scene_map.draft.json` 和风险自适应的 60/90/120 帧云端视觉计划，再以有界并发执行
 稀疏抽帧和批量视觉识别。视觉完成后自动把识别证据回填到镜头/事件索引，不重跑镜头边界。
 
 草案始终为 `coverage_reviewed=false`，不得直接用于正式成片。人工核对完整覆盖、场景边界、

@@ -344,9 +344,9 @@ def build_shadow_report(folder: Path, matching: object | None = None,
     visual_plan = build_selective_visual_plan(
         folder,
         target=0,
-        preferred=int(getattr(visual, "selective_target_frames", 45)),
-        minimum=int(getattr(visual, "selective_min_frames", 30)),
-        maximum=int(getattr(visual, "selective_max_frames", 60)),
+        preferred=int(getattr(visual, "selective_target_frames", 90)),
+        minimum=int(getattr(visual, "selective_min_frames", 60)),
+        maximum=int(getattr(visual, "selective_max_frames", 120)),
         segments=output_segments,
     )
     visual_review_ready = visual_index_matches_plan(folder)

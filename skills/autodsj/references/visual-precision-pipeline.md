@@ -1,6 +1,6 @@
 # AutoDSJ 视觉识别精度管线（2026-07 重构 · 认清「谁·在干嘛·在哪·细节·旁边谁」）
 
-> 本文保留人脸库、高清单帧识别和结构化 prompt 细节；抽帧调度已由 `selective_visual.py` 接管。正式链路每集只复核30～60帧，`VISUAL_SCHEMA="v3-selective-face-720p"`，禁止按固定8～10秒间隔恢复约287帧全片扫描。先读 `hybrid-evidence-matching.md`。
+> 本文保留人脸库、高清单帧识别和结构化 prompt 细节；抽帧调度已由 `selective_visual.py` 接管。正式链路每集只用云端复核60～120帧，`VISUAL_SCHEMA="v3-selective-face-720p"`，禁止按固定8～10秒间隔恢复约287帧全片扫描。先读 `hybrid-evidence-matching.md`。
 
 改视觉索引识别精度（抽帧/prompt/人脸库）时看这张图。所有路径相对
 `D:\@kaifa\AutoDSJ\project\`。这一层是**上游**（画面识别），

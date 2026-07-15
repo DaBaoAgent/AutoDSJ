@@ -101,7 +101,7 @@ def _visual_stats(folder: Path) -> dict:
             plan_matches = planned_times == indexed_times
         except (OSError, ValueError, TypeError):
             plan_matches = False
-    ready = (0 < frame_count <= 60 and success == frame_count and selective_schema
+    ready = (0 < frame_count <= 120 and success == frame_count and selective_schema
              and plan_matches and status not in {"extracting_frames", "recognizing_frames"})
     return {
         "exists": True, "ready": ready, "frame_count": frame_count,
@@ -708,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--resume", action="store_true", help="续跑视觉识别：复用已识别帧，只重试失败帧")
     p_run.add_argument("--skip-visual", action="store_true", help="跳过视觉识别（需已有索引）")
     p_run.add_argument("--target-frames", type=int, default=0,
-                       help="选择性视觉复核帧数（30-60；默认0=按风险自动选择）")
+                       help="选择性云端视觉复核帧数（60-120；默认0=按风险自动选择）")
     p_run.add_argument("--workers", type=int, default=3, help="视觉识别并发批数（默认3）")
     p_run.add_argument("--concurrency", type=int, default=None, help="渲染并发（覆盖，跳过基准）")
     p_run.add_argument("--no-render", action="store_true", help="只做匹配并写匹配报告/字幕，不成片")
@@ -731,17 +731,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--force", action="store_true", help="强制重建索引、草案和视觉结果")
     p_prepare.add_argument("--skip-visual", action="store_true", help="只建索引和场景草案")
     p_prepare.add_argument("--target-frames", type=int, default=0,
-                           help="视觉帧数（30-60；默认0=按风险自动选择）")
+                           help="云端视觉帧数（60-120；默认0=按风险自动选择）")
     p_prepare.add_argument("--workers", type=int, default=3,
                            help="抽帧与视觉识别并发（默认3）")
     p_prepare.set_defaults(func=cmd_prepare)
 
-    p_visual = sub.add_parser("visual", help="候选驱动视觉复核（风险自适应30/45/60帧）")
+    p_visual = sub.add_parser("visual", help="候选驱动云端视觉复核（风险自适应60/90/120帧）")
     p_visual.add_argument("--folder")
     p_visual.add_argument("--force", action="store_true", help="强制重跑（清空重来）")
     p_visual.add_argument("--interval", type=float, default=0.0, help="抽帧间隔秒（默认自适应/复用）")
     p_visual.add_argument("--target-frames", type=int, default=0,
-                          help="选择性视觉复核帧数（30-60；默认0=按风险自动选择）")
+                          help="选择性云端视觉复核帧数（60-120；默认0=按风险自动选择）")
     p_visual.add_argument("--workers", type=int, default=3, help="并发批数（默认3）")
     p_visual.set_defaults(func=cmd_visual)
 

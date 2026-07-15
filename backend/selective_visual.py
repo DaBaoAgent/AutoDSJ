@@ -52,8 +52,8 @@ def _script_segments(folder: Path) -> list[dict]:
 def resolve_visual_target(*, requested: int, preferred: int, minimum: int, maximum: int,
                           scene_count: int, segments: list[dict]) -> tuple[int, dict]:
     """Choose a bounded visual budget from scene complexity and match risk."""
-    minimum = max(1, min(int(minimum), 60))
-    maximum = max(minimum, min(int(maximum), 60))
+    minimum = max(1, min(int(minimum), 120))
+    maximum = max(minimum, min(int(maximum), 120))
     preferred = max(minimum, min(int(preferred), maximum))
     if int(requested or 0) > 0:
         fixed = max(minimum, min(int(requested), maximum))
@@ -85,8 +85,8 @@ def resolve_visual_target(*, requested: int, preferred: int, minimum: int, maxim
     }
 
 
-def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int = 45,
-                                minimum: int = 30, maximum: int = 60,
+def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int = 90,
+                                minimum: int = 60, maximum: int = 120,
                                 segments: list[dict] | None = None) -> dict:
     """Choose a bounded set of frames after text/scene narrowing.
 
@@ -95,8 +95,8 @@ def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int
     macro scene, so silent events still retain visual coverage.
     """
     folder = folder.resolve()
-    minimum = max(1, min(int(minimum), 60))
-    maximum = max(minimum, min(int(maximum), 60))
+    minimum = max(1, min(int(minimum), 120))
+    maximum = max(minimum, min(int(maximum), 120))
     scene_map_path = folder / "_scene_map.json"
     if not scene_map_path.exists():
         scene_map_path = folder / "_scene_map.draft.json"
@@ -118,7 +118,7 @@ def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int
                     for scene in scene_map.get("scenes", []) for left, right in scene.get("ranges", [])
                     if float(right) > float(left)]
     # Reserve one center for every macro scene before boundary detail. This
-    # prevents the 60-frame cap from starving scenes late in an episode.
+    # prevents the bounded frame cap from starving scenes late in an episode.
     for name, left, right in scene_ranges:
         _add(points, (left + right) / 2, f"scene-center:{name}", priority=3)
     for name, left, right in scene_ranges:
@@ -191,8 +191,8 @@ def visual_index_matches_plan(folder: Path) -> bool:
                for item in index.get("source_signature", [])
                if int(item.get("source_index", 1)) == 1]
     frame_count = int(index.get("frame_count") or len(index.get("frames", [])) or 0)
-    minimum = max(1, int(plan.get("minimum") or 30))
-    maximum = min(60, max(minimum, int(plan.get("maximum") or 60)))
+    minimum = max(1, int(plan.get("minimum") or 60))
+    maximum = min(120, max(minimum, int(plan.get("maximum") or 120)))
     return bool(
         minimum <= len(times) <= maximum
         and times == indexed
