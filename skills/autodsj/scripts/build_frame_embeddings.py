@@ -11,7 +11,7 @@ confirm the cache built without kicking off a full render.
 Run from ANYWHERE with the project venv (the project root is hard-wired below so
 imports resolve regardless of cwd):
 
-    D:/@kaifa/DaobaoAI-DY/project/.venv/Scripts/python.exe \
+    D:/@kaifa/AutoDSJ/project/.venv/Scripts/python.exe \
         <this script> "D:/自动剪辑/玫瑰的故事/玫瑰的故事 第N集"
 
 Requirements: the episode folder already has ``_source_visual_index.json``
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 # Hard-wire the DY project root so `backend.*` imports resolve from any cwd.
-PROJECT_ROOT = Path(r"D:\@kaifa\DaobaoAI-DY\project")
+PROJECT_ROOT = Path(r"D:\@kaifa\AutoDSJ\project")
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.embed_match import dashscope_key, frame_embeddings  # noqa: E402

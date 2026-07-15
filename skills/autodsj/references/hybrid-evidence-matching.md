@@ -14,7 +14,7 @@
 ## CAM++ 声纹
 
 - 安装 `requirements-audio.txt`，在剧集根或单集放 `_voices/<角色名>/*.wav|mp3|m4a|flac`。
-- 运行 `dy.py voices --folder <单集>`，按原片 SRT 对白区间提取 CAM++ 向量，产出 `_source_voice_index.json` 和 `_voice_gallery.json`。不跑全片 VAD/聚类，适合 CPU 笔记本。
+- 运行 `autodsj.py voices --folder <单集>`，按原片 SRT 对白区间提取 CAM++ 向量，产出 `_source_voice_index.json` 和 `_voice_gallery.json`。不跑全片 VAD/聚类，适合 CPU 笔记本。
 - 声纹只回答“这个事件里谁在说话”，不能替代人脸识别，也不能把候选带出父场景。
 - 无参考音频时不能建立角色身份，报告 `voice_index=false` 时按未启用处理；不得把匿名说话区间当成角色。
 
@@ -29,7 +29,7 @@
 
 - `shadow-match` 生成 `_selective_visual_plan.json`；默认45帧，最少30、最多60。
 - 优先复核动作/非说话状态、Top-2事件分差小的歧义镜头和人工范围；同时为每个完整大场景至少保留中心覆盖点。
-- `dy.py visual` 按不规则时间点抽帧。计划时间与 `_source_visual_index.json.source_signature` 不一致时，旧索引自动判过期。
+- `autodsj.py visual` 按不规则时间点抽帧。计划时间与 `_source_visual_index.json.source_signature` 不一致时，旧索引自动判过期。
 - 禁止把 `--interval` 密集抽帧用于正式链路；它只可用于明确的诊断实验。
 
 ## 验收

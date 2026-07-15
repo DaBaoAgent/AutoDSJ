@@ -341,7 +341,7 @@ def suggest_fixes(report: dict) -> list[str]:
         suggestions.append(
             "HIGH: 人物缺失或语义冲突（{n}处）。"
             "检查 parent_scene_plans 是否指向正确场景，"
-            "在关键时间点运行 dy.py visual --target-frames，"
+            "在关键时间点运行 autodsj.py visual --target-frames，"
             "然后重跑 shadow-match + render。"
             .format(n=report["high_count"])
         )

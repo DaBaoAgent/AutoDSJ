@@ -90,11 +90,11 @@
 ## 复跑命令
 
 ```powershell
-& $PY dy.py shots --folder "<素材夹>"
-& $PY dy.py events --folder "<素材夹>"
-& $PY dy.py shadow-match --folder "<素材夹>"
-& $PY dy.py run --folder "<素材夹>" --skip-visual --no-render --hierarchical-match
-& $PY dy.py run --folder "<素材夹>" --skip-visual --hierarchical-match
+& $PY autodsj.py shots --folder "<素材夹>"
+& $PY autodsj.py events --folder "<素材夹>"
+& $PY autodsj.py shadow-match --folder "<素材夹>"
+& $PY autodsj.py run --folder "<素材夹>" --skip-visual --no-render --hierarchical-match
+& $PY autodsj.py run --folder "<素材夹>" --skip-visual --hierarchical-match
 ```
 
 `shots --force` 只在原片或转场阈值变化时使用。文案变化不需重跑视觉索引，但必须重跑脚本表和影子匹配。

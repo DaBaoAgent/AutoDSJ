@@ -1,31 +1,31 @@
 ---
-name: dy-workflow
-description: Windows 上的 DY 电视剧/短剧全自动解说剪辑工作流。用户说“DY”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和30～60帧选择性视觉复核。
+name: autodsj
+description: Windows 上的 AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和30～60帧选择性视觉复核。
 ---
 
-# DY 工作流
+# AutoDSJ 工作流
 
 ## 唯一技能源与同步
 
-只修改 Git 仓库中的 `D:\@kaifa\DaobaoAI-DY\project\skills\dy-workflow`。不得把 Hermes 部署目录当作源文件直接迭代。每次修改后先校验并提交 Git，再运行：
+只修改 Git 仓库中的 `D:\@kaifa\AutoDSJ\project\skills\autodsj`。不得把 Hermes 部署目录当作源文件直接迭代。每次修改后先校验并提交 Git，再运行：
 
 ```powershell
-cd D:\@kaifa\DaobaoAI-DY\project
-.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --sync
-.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --check
+cd D:\@kaifa\AutoDSJ\project
+.\.venv\Scripts\python.exe scripts\sync_autodsj_skill.py --sync
+.\.venv\Scripts\python.exe scripts\sync_autodsj_skill.py --check
 ```
 
-Hermes 部署目录固定为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\dy-workflow`。同步工具会删除部署目录中的多余旧文件，并按每个文件 SHA-256 确认两边完全一致。
+Hermes 部署目录固定为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\autodsj`。同步工具会删除部署目录中的多余旧文件，并按每个文件 SHA-256 确认两边完全一致。
 
-项目：`D:\@kaifa\DaobaoAI-DY\project`
+项目：`D:\@kaifa\AutoDSJ\project`
 
-Python：`D:\@kaifa\DaobaoAI-DY\project\.venv\Scripts\python.exe`
+Python：`D:\@kaifa\AutoDSJ\project\.venv\Scripts\python.exe`
 
 素材根目录示例：`D:\自动剪辑\玫瑰的故事`
 
 换电脑或项目路径变化时，先读 [portable-deployment.md](references/portable-deployment.md)，不得照抄本机绝对路径。
 
-本工作流无 WebUI、无端口，只走 `dy.py` 这一条 CLI 管线。配音只用百炼 Qwen 克隆音色。**音量硬性规范：`voice.volume=100`、`drama.source_play_volume=100`，配音与原片再分别经 `loudnorm=I=-16:TP=-1.5:LRA=11` 归一化到 -16 LUFS 等响**。不得用 120%/50% 等纯增益组合代替响度归一化。
+本工作流无 WebUI、无端口，只走 `autodsj.py` 这一条 CLI 管线。配音只用百炼 Qwen 克隆音色。**音量硬性规范：`voice.volume=100`、`drama.source_play_volume=100`，配音与原片再分别经 `loudnorm=I=-16:TP=-1.5:LRA=11` 归一化到 -16 LUFS 等响**。不得用 120%/50% 等纯增益组合代替响度归一化。
 
 ## 不可跳过的顺序
 
@@ -43,11 +43,11 @@ Python：`D:\@kaifa\DaobaoAI-DY\project\.venv\Scripts\python.exe`
 ### 2. 先建文本和物理镜头索引
 
 ```powershell
-cd D:\@kaifa\DaobaoAI-DY\project
+cd D:\@kaifa\AutoDSJ\project
 $PY = ".\.venv\Scripts\python.exe"
-& $PY dy.py preflight --folder "<单集素材夹>"
-& $PY dy.py script --folder "<单集素材夹>"
-& $PY dy.py shots --folder "<单集素材夹>"
+& $PY autodsj.py preflight --folder "<单集素材夹>"
+& $PY autodsj.py script --folder "<单集素材夹>"
+& $PY autodsj.py shots --folder "<单集素材夹>"
 ```
 
 不要恢复旧的每 8～10 秒抽一帧、全片约 280 帧的 VL 扫描。先以 SRT、审校剧本和物理镜头关键图编完整场景地图；昂贵视觉只在文本缩小候选后运行。
@@ -55,7 +55,7 @@ $PY = ".\.venv\Scripts\python.exe"
 新集还没有 `★ 匹配报告.json` 时，允许一次不渲染引导：
 
 ```powershell
-& $PY dy.py run --folder "<单集素材夹>" --skip-visual --no-render
+& $PY autodsj.py run --folder "<单集素材夹>" --skip-visual --no-render
 ```
 
 ### 3. 建完整大场景地图
@@ -83,10 +83,10 @@ $PY = ".\.venv\Scripts\python.exe"
 ### 4. 建分层镜头并影子匹配
 
 ```powershell
-& $PY dy.py events --folder "<单集素材夹>"
-& $PY dy.py shadow-match --folder "<单集素材夹>"
-& $PY dy.py visual --folder "<单集素材夹>" --target-frames 45
-& $PY dy.py shadow-match --folder "<单集素材夹>"
+& $PY autodsj.py events --folder "<单集素材夹>"
+& $PY autodsj.py shadow-match --folder "<单集素材夹>"
+& $PY autodsj.py visual --folder "<单集素材夹>" --target-frames 45
+& $PY autodsj.py shadow-match --folder "<单集素材夹>"
 ```
 
 固定层级：`大场景 → 连续事件块 → 物理镜头 → 动作瞬间`。
@@ -103,7 +103,7 @@ $PY = ".\.venv\Scripts\python.exe"
 uv pip install --python $PY -r requirements-audio.txt
 uv pip install --python $PY --no-deps speakerlab==0.0.6
 # <剧集根>\_voices\<角色名>\*.wav
-& $PY dy.py voices --folder "<单集素材夹>"
+& $PY autodsj.py voices --folder "<单集素材夹>"
 ```
 
 缺 `speakerlab` 或参考音频时允许字幕/剧本路径运行，但报告必须显示 `voice_index=false`，不得声称声纹已生效。
@@ -120,8 +120,8 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 ### 5. 先预跑，再成片
 
 ```powershell
-& $PY dy.py run --folder "<单集素材夹>" --skip-visual --no-render --hierarchical-match
-& $PY dy.py run --folder "<单集素材夹>" --skip-visual --hierarchical-match
+& $PY autodsj.py run --folder "<单集素材夹>" --skip-visual --no-render --hierarchical-match
+& $PY autodsj.py run --folder "<单集素材夹>" --skip-visual --hierarchical-match
 ```
 
 正式渲染不带 `--hierarchical-match`、缺场景地图、地图不完整或预演哈希失效时，必须停止，不允许降级到旧匹配方法。
@@ -131,7 +131,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 换新剧或人物容易混淆时，在剧集根目录放 `_faces/<角色>/*.jpg`，每个主要角色 3–5 张清晰正脸，再运行：
 
 ```powershell
-& $PY dy.py faces build --folder "<单集素材夹>"
+& $PY autodsj.py faces build --folder "<单集素材夹>"
 ```
 
 ## 成片交付
@@ -150,7 +150,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 交付门禁已接入 `dy run` 的正式渲染末尾。已有成片缺交付文件、或人工修改文案后只需重建发布包时，运行：
 
 ```powershell
-& $PY dy.py deliver --folder "<单集素材夹>"
+& $PY autodsj.py deliver --folder "<单集素材夹>"
 ```
 
 `scripts/audit_pronouns.py` 和 `scripts/make_jianying_srt_txt.py` 仅用于人工诊断/单文件修复，不再是正式流程的必需手工步骤。向用户交付时报告成片、SRT、匹配报告、发布信息、剪映字幕和交付清单路径。
@@ -162,7 +162,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 只在成片存在且验收后执行：
 
 ```powershell
-& $PY dy.py clean --folder "<单集素材夹>"
+& $PY autodsj.py clean --folder "<单集素材夹>"
 ```
 
 该命令不再删除资产，而是把根目录中的工作文件统一归档到 `_DY工作文件`。必须保留原片、原片字幕、源文案和三项公开交付文件。
@@ -184,9 +184,9 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 - 接管后必须分别检查解说复用和原片明确复引。解说画面与任何已用片段重叠都应先消除；只有文案明确重复引用同一句原片对白、且必须保持口型与原声时，才允许记录为必要例外。
 - 「独立爆款版」短文案出片仅 2-3 分钟——正确。成片时长 = Σ解说配音 + Σ原片对白，由文案长度决定；引导日志「解说目标约2490s(90%)」只是按原片长度的默认假设，不代表漏渲染。
 
-- **广告禁区误封**：`dy.py run` 报 `RuntimeError: 素材区间命中广告禁区` 时，先查 `_source_ad_intervals.json`。视觉 API 描述中的"贴满小广告的墙""贴有广告的柱子"等场景陈设词会被 `backend/ad_filter.py` 关键词匹配为广告信号，把正常剧情封掉。修复：用 Python 把 `_source_visual_index.json` 中 `caption/props/scene/action/people` 字段里的 `广告` 替换为 `招贴` 或 `告示`，再删掉 `_source_ad_intervals.json` 让它重新生成。注意 `props` 字段也常含"广告"（如"左侧贴有广告的柱子""小广告、窗台盆栽"），必须一并处理，不能只修 `caption`：
+- **广告禁区误封**：`autodsj.py run` 报 `RuntimeError: 素材区间命中广告禁区` 时，先查 `_source_ad_intervals.json`。视觉 API 描述中的"贴满小广告的墙""贴有广告的柱子"等场景陈设词会被 `backend/ad_filter.py` 关键词匹配为广告信号，把正常剧情封掉。修复：用 Python 把 `_source_visual_index.json` 中 `caption/props/scene/action/people` 字段里的 `广告` 替换为 `招贴` 或 `告示`，再删掉 `_source_ad_intervals.json` 让它重新生成。注意 `props` 字段也常含"广告"（如"左侧贴有广告的柱子""小广告、窗台盆栽"），必须一并处理，不能只修 `caption`：
   ```powershell
-  cd D:\@kaifa\DaobaoAI-DY\project
+  cd D:\@kaifa\AutoDSJ\project
   & $PY -c "
   import json; from pathlib import Path
   p = Path(r'<单集素材夹>\_source_visual_index.json')
@@ -200,9 +200,9 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
   "
   rm "<单集素材夹>\_source_ad_intervals.json"
   ```
-  修完重跑 `dy.py run --skip-visual --no-render`。注意：仅修正视觉层不会丢失信息——广告区判定仍靠字幕信号（如"唯品会""搜玫瑰"等）正常工作。详细案例见 `references/ad-filter-false-positive-fix.md`。
+  修完重跑 `autodsj.py run --skip-visual --no-render`。注意：仅修正视觉层不会丢失信息——广告区判定仍靠字幕信号（如"唯品会""搜玫瑰"等）正常工作。详细案例见 `references/ad-filter-false-positive-fix.md`。
 
-项目的完整命令与数据结构以 `D:\@kaifa\DaobaoAI-DY\project\README.md` 为准。
+项目的完整命令与数据结构以 `D:\@kaifa\AutoDSJ\project\README.md` 为准。
 
 ## 耗时参考
 
@@ -231,7 +231,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 新集默认先运行：
 
 ```powershell
-$PY dy.py prepare --folder "<单集文件夹>"
+$PY autodsj.py prepare --folder "<单集文件夹>"
 ```
 
 该命令并行建立脚本表与物理镜头索引，生成事件索引、
@@ -240,5 +240,5 @@ $PY dy.py prepare --folder "<单集文件夹>"
 
 草案始终为 `coverage_reviewed=false`，不得直接用于正式成片。人工核对完整覆盖、场景边界、
 广告排除和父段计划后，另存为 `_scene_map.json` 并设置 `coverage_reviewed=true`。
-只生成索引和草案时使用 `dy.py prepare --skip-visual`；显式固定视觉预算时使用
+只生成索引和草案时使用 `autodsj.py prepare --skip-visual`；显式固定视觉预算时使用
 `--target-frames 30..60`，否则保持风险自适应。

@@ -1,4 +1,4 @@
-# DY 工作流
+# AutoDSJ 工作流
 
 面向电视剧、短剧解说的单线自动剪辑管线。正式成片只允许以下路径：
 
@@ -8,7 +8,7 @@
 
 ## 唯一正式管线
 
-- CLI 入口：`dy.py`
+- CLI 入口：`autodsj.py`
 - 匹配内核：`anchored_pipeline.py`
 - 配音后端：百炼 Qwen 克隆音色
 - 默认配音音量：100%
@@ -50,8 +50,8 @@
 在项目目录执行：
 
 ```powershell
-cd D:\@kaifa\DaobaoAI-DY\project
-.\.venv\Scripts\python.exe dy.py doctor
+cd D:\@kaifa\AutoDSJ\project
+.\.venv\Scripts\python.exe autodsj.py doctor
 ```
 
 ### 1. 先审校文案
@@ -71,7 +71,7 @@ cd D:\@kaifa\DaobaoAI-DY\project
 新集优先使用并行准备命令：
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py prepare --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py prepare --folder "D:\自动剪辑\某剧\第N集"
 ```
 
 它会并行建立脚本表与物理镜头索引，继续生成事件索引、`_scene_map.draft.json`
@@ -86,15 +86,15 @@ cd D:\@kaifa\DaobaoAI-DY\project
 需要只生成索引和场景草案、不调用视觉模型时：
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py prepare --folder "D:\自动剪辑\某剧\第N集" --skip-visual
+.\.venv\Scripts\python.exe autodsj.py prepare --folder "D:\自动剪辑\某剧\第N集" --skip-visual
 ```
 
 以下分步命令仍可用于诊断：
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py preflight --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe dy.py script --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe dy.py shots --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py preflight --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py script --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py shots --folder "D:\自动剪辑\某剧\第N集"
 ```
 
 先用 SRT、剧本和物理镜头关键图完成场景地图。不要为了建图恢复每 8～10 秒一帧的全片 VL 扫描。
@@ -102,7 +102,7 @@ cd D:\@kaifa\DaobaoAI-DY\project
 首次处理新集、尚无旧匹配报告时，可运行一次不渲染的引导匹配：
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --no-render
+.\.venv\Scripts\python.exe autodsj.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --no-render
 ```
 
 `--no-render` 只用于生成基础报告，不代表通过正式门禁。
@@ -161,10 +161,10 @@ cd D:\@kaifa\DaobaoAI-DY\project
 ### 4. 建分层索引并影子匹配
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py events --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe dy.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe dy.py visual --folder "D:\自动剪辑\某剧\第N集" --target-frames 45
-.\.venv\Scripts\python.exe dy.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py events --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py visual --folder "D:\自动剪辑\某剧\第N集" --target-frames 45
+.\.venv\Scripts\python.exe autodsj.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
 ```
 
 匹配层级固定为：
@@ -187,7 +187,7 @@ cd D:\@kaifa\DaobaoAI-DY\project
 uv pip install --python .\.venv\Scripts\python.exe -r requirements-audio.txt
 uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 # 放置 <剧集根>\_voices\<角色名>\*.wav（每人至少一段干净对白）
-.\.venv\Scripts\python.exe dy.py voices --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py voices --folder "D:\自动剪辑\某剧\第N集"
 ```
 
 没有 `speakerlab` 或角色参考音频时，匹配器明确记录 `voice_index=false` 并继续使用字幕/剧本，不伪造角色声纹。
@@ -205,8 +205,8 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 ### 5. 先预跑，再正式渲染
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --no-render --hierarchical-match
-.\.venv\Scripts\python.exe dy.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --hierarchical-match
+.\.venv\Scripts\python.exe autodsj.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --no-render --hierarchical-match
+.\.venv\Scripts\python.exe autodsj.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --hierarchical-match
 ```
 
 正式命令缺少 `--hierarchical-match`、场景地图不完整、父段计划不连续或地图与预演摘要哈希不一致时，程序必须停止，不能降级到旧匹配器继续渲染。
@@ -245,23 +245,23 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
 
 配音和原片的纯增益固定为 100%，渲染时再分别通过 `loudnorm=I=-16:TP=-1.5:LRA=11` 统一听感响度；解说覆盖处原片声默认静音。不要用 120%/50% 的增益组合代替响度归一化。
 
-## DY 技能同步
+## AutoDSJ 技能同步
 
-Git 中的唯一技能源是 `skills/dy-workflow`，Hermes 目录只是部署副本。所有规则迭代必须先修改仓库版本、测试并提交，再单向同步：
+Git 中的唯一技能源是 `skills/autodsj`，Hermes 目录只是部署副本。所有规则迭代必须先修改仓库版本、测试并提交，再单向同步：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --sync
-.\.venv\Scripts\python.exe scripts\sync_dy_skill.py --check
+.\.venv\Scripts\python.exe scripts\sync_autodsj_skill.py --sync
+.\.venv\Scripts\python.exe scripts\sync_autodsj_skill.py --check
 ```
 
-默认目标为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\dy-workflow`。`--check` 会比较相对路径和 SHA-256；缺失、多余或内容不同都会返回非零退出码，避免 Codex 与 Hermes 使用不同版本。
+默认目标为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\autodsj`。`--check` 会比较相对路径和 SHA-256；缺失、多余或内容不同都会返回非零退出码，避免 Codex 与 Hermes 使用不同版本。
 
 ## 清理规则
 
 完成渲染并验收后，可清理可重建产物：
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py clean --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py clean --folder "D:\自动剪辑\某剧\第N集"
 ```
 
 会删除：旧裁切片、拼接中间视频、旧配音 WAV/TTS 分段、诊断帧、渲染日志和临时清单。
@@ -277,9 +277,9 @@ Git 中的唯一技能源是 `skills/dy-workflow`，Hermes 目录只是部署副
 ## 常用诊断
 
 ```powershell
-.\.venv\Scripts\python.exe dy.py status --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe dy.py doctor
-.\.venv\Scripts\python.exe dy.py faces list --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py status --folder "D:\自动剪辑\某剧\第N集"
+.\.venv\Scripts\python.exe autodsj.py doctor
+.\.venv\Scripts\python.exe autodsj.py faces list --folder "D:\自动剪辑\某剧\第N集"
 ```
 
 画面不准时先检查大场景地图和父段计划，不要先扩大搜索时间窗。人物不准时补充 `_faces/<角色>/` 参考照并重建人脸库；动作不准时检查事件块与物理镜头关键帧。
@@ -287,7 +287,7 @@ Git 中的唯一技能源是 `skills/dy-workflow`，Hermes 目录只是部署副
 ## 主要模块
 
 ```text
-dy.py                           唯一 CLI 入口与正式门禁
+autodsj.py                           唯一 CLI 入口与正式门禁
 anchored_pipeline.py            Qwen 配音、受约束时间线与渲染
 backend/scene_map.py            完整场景地图校验与哈希门禁
 backend/narration_intent.py     结构化人物/动作/地点/转场意图

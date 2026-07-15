@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 
-SKILL_NAME = "dy-workflow"
+SKILL_NAME = "autodsj"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = PROJECT_ROOT / "skills" / SKILL_NAME
 DEFAULT_TARGET = (

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.export_dy_portable import export_package
+from scripts.export_autodsj_portable import export_package
 
 
 class PortableExportTests(unittest.TestCase):

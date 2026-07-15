@@ -7,13 +7,13 @@ set "PY=.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
 if "%~1"=="" (
-  "%PY%" dy.py run
+  "%PY%" autodsj.py run
 ) else (
-  "%PY%" dy.py %*
+  "%PY%" autodsj.py %*
 )
 
 if errorlevel 1 (
   echo.
-  echo [DY 工作流] 执行失败，请查看上方错误信息。
+  echo [AutoDSJ 工作流] 执行失败，请查看上方错误信息。
   pause
 )

@@ -1,9 +1,9 @@
-# DY 匹配与剪辑内部机制（调试地图）
+# AutoDSJ 匹配与剪辑内部机制（调试地图）
 
 > 当前正式匹配主路径已改为 `text_retriever.py → voice_index.py（可选）→ sequence_decoder.py → selective_visual.py`。下文 `visual_matcher.py` 的“全片单次扫描/帧向量”仅用于理解旧报告和诊断，不得重新接管正式成片。先读 `hybrid-evidence-matching.md`。
 
 改「解说→画面匹配」或「原片剪辑」时，先看这张图定位到具体文件/函数，别从头摸。
-所有路径相对 `D:\@kaifa\DaobaoAI-DY\project\`。
+所有路径相对 `D:\@kaifa\AutoDSJ\project\`。
 
 ## 数据流
 
@@ -30,7 +30,7 @@
   - `VisualIntervalAllocator.allocate(...)` 打分（**2026-07 重构：全片单次扫描，语义为主，锚定窗为辅**）：对**整条可用时间轴**逐候选窗打分 = 语义分（有 DashScope key 用 embedding 余弦，否则 `_semantic_score` n-gram）+ **人物身份加减分**（`_character_hits` 命中同一角色组 **+0.4**，画面出现别的主角 **-0.3**）+ **就近微调**（落在锚定首选窗内 +0.1，窗外按距离 150s 线性衰减到 0）+ 时序小 bonus(+0.04)。取全局最高分。**关键：锚定窗只是弱 tiebreaker，不再是硬约束。** 旧设计是 [首选窗/±45s/全片] 三档 + 命中首选档就 break，等于把每个解说镜头锁死在相邻`原片`的位置——解说讲的角色/场景若在别处（会议在713-1109、姜雪琼在299-546），画面永远够不着，只能抓窗口内随便一帧（打字手/食堂路人）。改成全片语义主导后「说到谁就出现谁、说到什么场景就出现什么场景」才成立（第4集实测：会议/姜雪琼/项目策划书/庄国栋会后 全部命中，分1.0）。`_window_evidence` 已加 bisect（帧按时间排序，`self._frame_times`）加速全片扫描。性能：93解说镜头全片分配 ~3-4 分钟，可接受（同帧余弦跨重叠窗有重复计算，若日后嫌慢可按 query 预算一次 time→cosine 缓存）。
   改原片预留逻辑时勿退回 `reserve`（会把有意重复引用当错误崩）。
 
-  - `VisualIntervalAllocator.allocate(..., scene_ranges=)` + `anchored_pipeline.py::_load_scene_map/_classify_scene`：**场景段硬锁定（大镜头匹配，2026-07，凌驾于全片语义之上）**。素材夹放 `_scene_map.json`（每场景=`name`+`ranges`原片秒段列表+`keywords`强/`characters`弱）。`allocate_visual_all` 加载后，逐解说镜头用**父句全文**（按 `tts_parent_id` 把同句各分镜文字拼回，避免单个 clause 漏掉兄弟 clause 的关键词）经 `_classify_scene` 打分（keyword×2+character×1，需≥1关键词命中）分类到场景，命中就把 `scene_ranges` 传给 `allocate()`。`allocate()` 内 `_scan(restrict)`：restrict 给了就只在场景 ranges 内选候选窗（语义/人物照常打分，但**不加就近微调**——场景内纯语义决定）；场景内无空闲才 `_scan(None)` 回退全片（永不崩）。日志「[场景锁定] 行N-镜M → 「场景名」」。**建/调场景图**：先通读 `_source_visual_index.json` 时间轴（time+people+caption）识别各场景原片秒段。**坑**：① keyword 别太宽（"项目组"会误锁"正式进入项目组"进会议）；② 场景太短会被同类多条解说占满→回退全片抓烂帧，把同类镜头的多段 ranges 并进一个场景防耗尽（如"会议"并入全部会议室镜头 5 段）；③ 硬锁定牺牲原始余弦均分（0.8→0.6级）换场景正确，是用户要的取舍。\n\n  - **`--no-render`（只匹配不成片，审匹配用）**：`dy.py run --skip-visual --no-render` → `runner.render(no_render=True)` → `anchored_pipeline.py --no-render`。main() 在 `allocate_visual_all`+`build_timeline` 后、`render_video` 前 `write_outputs`（写 `★匹配报告.json`/`★字幕.srt`）就 return，**不编码视频**。用于改 `_scene_map.json`/匹配逻辑后快速看落点对不对（`★匹配报告.json` 的 `clip_start` 是否落进目标场景 ranges），OK 再去掉 `--no-render` 正式成片。改动落在 `dy.py`(cmd_run+argparse)、`backend/runner.py`(build_pipeline_command+render 的 no_render)、`anchored_pipeline.py`(main 的 `--no-render` 早退)。
+  - `VisualIntervalAllocator.allocate(..., scene_ranges=)` + `anchored_pipeline.py::_load_scene_map/_classify_scene`：**场景段硬锁定（大镜头匹配，2026-07，凌驾于全片语义之上）**。素材夹放 `_scene_map.json`（每场景=`name`+`ranges`原片秒段列表+`keywords`强/`characters`弱）。`allocate_visual_all` 加载后，逐解说镜头用**父句全文**（按 `tts_parent_id` 把同句各分镜文字拼回，避免单个 clause 漏掉兄弟 clause 的关键词）经 `_classify_scene` 打分（keyword×2+character×1，需≥1关键词命中）分类到场景，命中就把 `scene_ranges` 传给 `allocate()`。`allocate()` 内 `_scan(restrict)`：restrict 给了就只在场景 ranges 内选候选窗（语义/人物照常打分，但**不加就近微调**——场景内纯语义决定）；场景内无空闲才 `_scan(None)` 回退全片（永不崩）。日志「[场景锁定] 行N-镜M → 「场景名」」。**建/调场景图**：先通读 `_source_visual_index.json` 时间轴（time+people+caption）识别各场景原片秒段。**坑**：① keyword 别太宽（"项目组"会误锁"正式进入项目组"进会议）；② 场景太短会被同类多条解说占满→回退全片抓烂帧，把同类镜头的多段 ranges 并进一个场景防耗尽（如"会议"并入全部会议室镜头 5 段）；③ 硬锁定牺牲原始余弦均分（0.8→0.6级）换场景正确，是用户要的取舍。\n\n  - **`--no-render`（只匹配不成片，审匹配用）**：`autodsj.py run --skip-visual --no-render` → `runner.render(no_render=True)` → `anchored_pipeline.py --no-render`。main() 在 `allocate_visual_all`+`build_timeline` 后、`render_video` 前 `write_outputs`（写 `★匹配报告.json`/`★字幕.srt`）就 return，**不编码视频**。用于改 `_scene_map.json`/匹配逻辑后快速看落点对不对（`★匹配报告.json` 的 `clip_start` 是否落进目标场景 ranges），OK 再去掉 `--no-render` 正式成片。改动落在 `autodsj.py`(cmd_run+argparse)、`backend/runner.py`(build_pipeline_command+render 的 no_render)、`anchored_pipeline.py`(main 的 `--no-render` 早退)。
 
   - `anchored_pipeline.py`
   - `NarrationSegment.keep_ranges`：原片片段剪停顿后要保留的绝对时间子区间列表（空=整段）。
@@ -59,8 +59,8 @@ n-gram/别名匹配有硬上限：解说是**故事概括**（「设法进入活
 
 视觉索引已缓存（`_source_visual_index.json`）时，改脚本表/匹配/剪辑逻辑后：
 ```
-dy.py script --folder "<素材>"            # 若改了脚本表生成逻辑，先重生成
-dy.py run --folder "<素材>" --skip-visual  # 跳过视觉重扫（很慢），直接 TTS→分配→渲染
+autodsj.py script --folder "<素材>"            # 若改了脚本表生成逻辑，先重生成
+autodsj.py run --folder "<素材>" --skip-visual  # 跳过视觉重扫（很慢），直接 TTS→分配→渲染
 ```
 
 ## 校验

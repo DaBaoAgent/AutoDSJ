@@ -3,7 +3,7 @@
 比"逐帧语义匹配"更强的一层：把原片切成有意义的**大镜头场景段**（首次会议 687-889、
 病房 484-575、活动现场 1620-1761…），解说按关键词/人物分类到场景，命中就**硬锁定**到
 该场景的原片区间里匹配。解决"说到开会却放成食堂/活动现场"的张冠李戴。所有路径相对
-`D:\@kaifa\DaobaoAI-DY\project\`。
+`D:\@kaifa\AutoDSJ\project\`。
 
 ## 何时用
 - 用户反馈某类解说画面成片系统性错放（"开会放成 XX""活动现场放成 XX"）。
@@ -49,9 +49,9 @@
 - `backend/visual_matcher.py::VisualIntervalAllocator.allocate(..., scene_ranges=)`：内层 `_scan(restrict)`。有 `scene_ranges` 就**硬限制**候选窗落在场景区间内；**场景占满(无空闲)才回退全片** `_scan(None)`，绝不崩。语义 embedding + 人物加分照旧，锚定窗 proximity 仅在无场景锁定时生效。
 
 ## `--no-render`（只匹配不成片，供审阅）
-`dy.py run --folder "<素材>" --skip-visual --no-render` → 只跑 TTS+分镜+场景锁定分配，写
+`autodsj.py run --folder "<素材>" --skip-visual --no-render` → 只跑 TTS+分镜+场景锁定分配，写
 `★ 匹配报告.json` / `★ 字幕.srt`，**跳过成片渲染**。用户"先看匹配对不对再成片"时用。
-链路：`dy.py cmd_run`(args.no_render) → `runner.render(no_render=True)` → `build_pipeline_command` 加 `--no-render` → `anchored_pipeline.main()` 在 `build_timeline` 后 `write_outputs` 然后 return（不 `render_video`）。审阅通过后去掉 `--no-render` 正式成片。
+链路：`autodsj.py cmd_run`(args.no_render) → `runner.render(no_render=True)` → `build_pipeline_command` 加 `--no-render` → `anchored_pipeline.main()` 在 `build_timeline` 后 `write_outputs` 然后 return（不 `render_video`）。审阅通过后去掉 `--no-render` 正式成片。
 
 ## 给某集建场景图的标准流程
 1. 读整集视觉索引时间轴：`_source_visual_index.json` 的 frames 按 `time` 排序，打印 `time [scene] people :: caption`。

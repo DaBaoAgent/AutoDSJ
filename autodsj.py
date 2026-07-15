@@ -5,9 +5,9 @@
   ->  检测素材  ->  视觉识别  ->  生成脚本表  ->  配音 + 剪辑 + 后处理  ->  ★ 成片.mp4
 
 常用：
-    python dy.py run --folder "D:\\自动剪辑\\某剧"     # 一键全流程
-    python dy.py doctor                              # 环境自检
-    python dy.py status                              # 查看当前进度
+    python autodsj.py run --folder "D:\\自动剪辑\\某剧"     # 一键全流程
+    python autodsj.py doctor                              # 环境自检
+    python autodsj.py status                              # 查看当前进度
 """
 
 from __future__ import annotations

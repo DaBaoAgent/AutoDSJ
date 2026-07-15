@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""DaobaoAI-DY 前置脚本 —— 每次跑管线前运行，确保 _DY工作文件/ 干净有最新索引"""
+"""AutoDSJ 前置脚本 —— 每次跑管线前运行，确保 _DY工作文件/ 干净有最新索引"""
 
 import os, sys, json, shutil
 from pathlib import Path
@@ -55,6 +55,6 @@ def main(folder: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("用法: python prep_dy.py <集数文件夹>")
+        print("用法: python prep_autodsj.py <集数文件夹>")
         sys.exit(1)
     main(sys.argv[1])

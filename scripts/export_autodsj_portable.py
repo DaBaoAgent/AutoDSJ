@@ -7,19 +7,19 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills" / "dy-workflow"
+SKILL = ROOT / "skills" / "autodsj"
 DEFAULT_OUTPUT = Path(r"E:\Codex-DY全自动剪辑复用包")
 
 
 def export_package(output: Path) -> dict:
     output = output.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
-    skill_target = output / "dy-workflow"
+    skill_target = output / "autodsj"
     if skill_target.exists():
         shutil.rmtree(skill_target)
     shutil.copytree(SKILL, skill_target)
 
-    bundle = output / "DaobaoAI-DY.bundle"
+    bundle = output / "AutoDSJ.bundle"
     if bundle.exists():
         bundle.unlink()
     subprocess.run(

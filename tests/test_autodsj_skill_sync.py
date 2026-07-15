@@ -4,14 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.sync_dy_skill import compare_skill, is_in_sync, sync_skill
+from scripts.sync_autodsj_skill import compare_skill, is_in_sync, sync_skill
 
 
 class SkillSyncTests(unittest.TestCase):
     def _source(self, root: Path) -> Path:
-        source = root / "source" / "dy-workflow"
+        source = root / "source" / "autodsj"
         (source / "references").mkdir(parents=True)
-        (source / "SKILL.md").write_text("---\nname: dy-workflow\n---\n", "utf-8")
+        (source / "SKILL.md").write_text("---\nname: autodsj\n---\n", "utf-8")
         (source / "references" / "rules.md").write_text("v1\n", "utf-8")
         return source
 
@@ -19,7 +19,7 @@ class SkillSyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = self._source(root)
-            target = root / "target" / "dy-workflow"
+            target = root / "target" / "autodsj"
             target.mkdir(parents=True)
             (target / "SKILL.md").write_text("old\n", "utf-8")
             (target / "obsolete.md").write_text("delete me\n", "utf-8")
@@ -36,7 +36,7 @@ class SkillSyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = self._source(root)
-            target = root / "target" / "dy-workflow"
+            target = root / "target" / "autodsj"
             target.mkdir(parents=True)
             (target / "SKILL.md").write_text("different\n", "utf-8")
 

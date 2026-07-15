@@ -1,9 +1,9 @@
-# DY 视觉识别精度管线（2026-07 重构 · 认清「谁·在干嘛·在哪·细节·旁边谁」）
+# AutoDSJ 视觉识别精度管线（2026-07 重构 · 认清「谁·在干嘛·在哪·细节·旁边谁」）
 
 > 本文保留人脸库、高清单帧识别和结构化 prompt 细节；抽帧调度已由 `selective_visual.py` 接管。正式链路每集只复核30～60帧，`VISUAL_SCHEMA="v3-selective-face-720p"`，禁止按固定8～10秒间隔恢复约287帧全片扫描。先读 `hybrid-evidence-matching.md`。
 
 改视觉索引识别精度（抽帧/prompt/人脸库）时看这张图。所有路径相对
-`D:\@kaifa\DaobaoAI-DY\project\`。这一层是**上游**（画面识别），
+`D:\@kaifa\AutoDSJ\project\`。这一层是**上游**（画面识别），
 下游「解说→画面匹配/剪辑」见 `matching-and-editing-internals.md`。
 
 **核心原则：上游看不清，下游向量/身份匹配再强也白搭（garbage in garbage out）。**
@@ -39,7 +39,7 @@
   - `_build_identity_map(folder, records, settings)`：对每帧 `image_path` 跑 `FaceIdentifier.identify`。人脸库**全集共享**：先查单集夹 `folder/_face_gallery.json`，再回退剧集根 `folder.parent/_face_gallery.json`。无库/没装 insightface → 返回 `{}`，管线退回纯 VL 描述（不阻塞）。
   - `_apply_identity(frames, identity_map)`：把 `render_people_field` 的「演员（饰角色）」写进帧 `people`（覆盖 VL 的），存 `identified`，并把角色名前置进 caption（`【黄亦玫、庄国栋】…`）。在收尾 + 缓存命中两条路径都调，保证 identity 总是最新。
 - `backend/face_gallery.py`（新）：ArcFace 建库 + 识别。见下节。
-- `dy.py`：`dy faces build/add/list`（`_faces_locate` 默认剧集根、`--here` 单集）；`run` 打印分辨率/批量/人脸库开关；`doctor`/`status` 加人脸库自检。`visual_batch_size=settings.visual.batch`。
+- `autodsj.py`：`dy faces build/add/list`（`_faces_locate` 默认剧集根、`--here` 单集）；`run` 打印分辨率/批量/人脸库开关；`doctor`/`status` 加人脸库自检。`visual_batch_size=settings.visual.batch`。
 
 ## 人脸库 workflow（`backend/face_gallery.py`）
 

@@ -23,7 +23,7 @@ def main() -> int:
     folder = Path(sys.argv[1].strip().strip('"'))
     table = folder / "_drama_script_table.json"
     if not table.exists():
-        print(f"找不到脚本表: {table}  (先跑 dy.py script 生成)")
+        print(f"找不到脚本表: {table}  (先跑 autodsj.py script 生成)")
         return 1
     data = json.loads(table.read_text("utf-8"))
     clips = [

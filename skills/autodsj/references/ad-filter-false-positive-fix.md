@@ -6,7 +6,7 @@
 RuntimeError: 素材区间命中广告禁区：2603.733-2650.333 (原片行1)
 ```
 
-`dy.py run --skip-visual --no-render` 在 reserve_source_clip 阶段中断。
+`autodsj.py run --skip-visual --no-render` 在 reserve_source_clip 阶段中断。
 
 ## 根因
 
@@ -27,7 +27,7 @@ RuntimeError: 素材区间命中广告禁区：2603.733-2650.333 (原片行1)
 
 2. 删除 `_source_ad_intervals.json` 让它重新生成
 
-3. 重跑 `dy.py run --skip-visual --no-render`
+3. 重跑 `autodsj.py run --skip-visual --no-render`
 
 ## 验证
 
