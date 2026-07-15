@@ -17,6 +17,7 @@ from .vision_api import _call_bailian_multimodal_json, _extract_frames_at_times,
 
 
 CACHE_FILE = "_candidate_visual_review.json"
+ESCALATION_CACHE_FILE = "_candidate_visual_escalation.json"
 SCHEMA = "v1-scene-bounded-multiframe-candidate-review"
 
 
@@ -40,9 +41,38 @@ def _range_allowed(start: float, end: float, ranges: list[tuple[float, float]]) 
 
 
 def _sample_times(start: float, end: float, count: int) -> list[float]:
-    count = max(1, min(3, int(count or 3)))
-    ratios = {1: (0.5,), 2: (0.3, 0.7), 3: (0.2, 0.5, 0.8)}[count]
+    count = max(1, min(9, int(count or 3)))
+    if count == 1:
+        ratios = (0.5,)
+    elif count == 2:
+        ratios = (0.3, 0.7)
+    elif count == 3:
+        ratios = (0.2, 0.5, 0.8)
+    else:
+        # Include the beginning/end state while staying away from exact cuts.
+        ratios = tuple(0.08 + 0.84 * index / (count - 1) for index in range(count))
     return [round(start + (end - start) * ratio, 3) for ratio in ratios]
+
+
+def _limit_images_per_candidate(images: list[dict], limit: int) -> list[dict]:
+    """Evenly reduce an oversized multimodal request without dropping candidates."""
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for item in images:
+        candidate_id = str(item.get("candidate_id") or "")
+        if candidate_id not in grouped:
+            grouped[candidate_id] = []
+            order.append(candidate_id)
+        grouped[candidate_id].append(item)
+    output: list[dict] = []
+    for candidate_id in order:
+        values = grouped[candidate_id]
+        if len(values) <= limit:
+            output.extend(values)
+            continue
+        indexes = [round(index * (len(values) - 1) / (limit - 1)) for index in range(limit)]
+        output.extend(values[index] for index in indexes)
+    return output
 
 
 def _task_priority(segment: dict) -> float:
@@ -126,7 +156,7 @@ def _prompt(task: dict) -> str:
     requirements = task["intent"].get("hard_requirements") or {}
     candidate_ids = [item["shot_id"] for item in task["candidates"]]
     return (
-        "你是电视剧剪辑候选镜头复核器。下面是同一句解说的多个候选镜头，每个候选按时间给出前/中/后帧。\n"
+        "你是电视剧剪辑候选镜头复核器。下面是同一句解说的多个候选镜头，每个候选按时间顺序给出多帧。\n"
         "只比较单帧和连续三帧可见事实，不推断集数、剧情因果或谁一定在说话。人物姓名只能使用每张图前的“已知人物”；"
         "已知人物为无时绝不猜姓名。场景范围已经由人工场景地图限定，你不能推荐候选列表之外的镜头。\n"
         f"解说：{task['text']}\n场景硬边界：{task.get('scene_hint') or '已限定范围'}\n"
@@ -183,19 +213,32 @@ def _sanitize_review(task: dict, parsed: dict, known_roles: dict[str, set[str]],
     }
 
 
-def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: dict,
-                                matching: object, visual: object, *, model: str) -> dict:
+def _run_candidate_visual_review_phase(
+    folder: Path,
+    segments: list[dict],
+    scene_map: dict,
+    matching: object,
+    visual: object,
+    *,
+    model: str,
+    cache_file: str = CACHE_FILE,
+    frames_per_candidate: int | None = None,
+    only_segment_ids: set[str] | None = None,
+    phase: str = "base",
+) -> dict:
     folder = folder.resolve()
     tasks = build_review_tasks(
         segments, scene_map,
         max_segments=int(getattr(matching, "candidate_review_max_segments", 12)),
         candidates_per_segment=int(getattr(matching, "candidate_review_candidates", 3)),
-        frames_per_candidate=int(getattr(matching, "candidate_review_frames", 3)),
+        frames_per_candidate=int(frames_per_candidate or getattr(matching, "candidate_review_frames", 3)),
     )
+    if only_segment_ids is not None:
+        tasks = [item for item in tasks if item["segment_id"] in only_segment_ids]
     material = detect_materials(str(folder), max_videos=1)
     video = Path(material.video_path)
     signature = _signature(video, model, tasks, matching, visual)
-    cache_path = folder / CACHE_FILE
+    cache_path = folder / cache_file
     cached_reviews: list[dict] = []
     if cache_path.exists():
         try:
@@ -210,7 +253,7 @@ def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: d
     started = time.perf_counter()
     completed_ids = {str(item.get("segment_id")) for item in cached_reviews}
     pending_tasks = [item for item in tasks if item["segment_id"] not in completed_ids]
-    base = {"schema": SCHEMA, "source_signature": signature, "model": model,
+    base = {"schema": SCHEMA, "phase": phase, "source_signature": signature, "model": model,
             "task_count": len(tasks), "task_segment_ids": [item["segment_id"] for item in tasks],
             "cache_hit": False, "resumed_count": len(cached_reviews),
             "reviews": list(cached_reviews), "errors": []}
@@ -257,19 +300,16 @@ def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: d
                     images.append(record)
             task_images[task["segment_id"]] = images
         identity_map = _build_identity_map(folder, records, SimpleNamespace(visual=visual))
-        known_by_candidate: dict[str, dict[str, set[str]]] = {}
         for task in pending_tasks:
-            segment_roles: dict[str, set[str]] = {}
             for item in task_images[task["segment_id"]]:
                 identities = identity_map.get(item["frame_id"], [])
                 roles = {str(value.get("role")) for value in identities if value.get("role")}
-                segment_roles.setdefault(item["candidate_id"], set()).update(roles)
+                item["identity_roles"] = roles
                 item["known_people"] = render_known_people(identities)
                 item["label"] = (
                     f"candidate={item['candidate_id']}; position={item['position']}; "
                     f"time={_format_time(item['time'])}; 已知人物：{item['known_people'] or '无'}"
                 )
-            known_by_candidate[task["segment_id"]] = segment_roles
 
         timeout = int(getattr(matching, "candidate_review_timeout_seconds", 240))
         min_confidence = float(getattr(matching, "candidate_review_min_confidence", 0.72))
@@ -279,13 +319,34 @@ def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: d
             expected = sum(len(item["times"]) for item in task["candidates"])
             if len(images) != expected:
                 raise RuntimeError(f"候选帧提取不完整：{len(images)}/{expected}")
-            parsed = retry_call(
-                lambda: _call_bailian_multimodal_json(
-                    api_key, model, _prompt(task), images, timeout=timeout),
-                attempts=3, base_delay=2.0, max_delay=12.0,
-            )
-            return _sanitize_review(
-                task, parsed, known_by_candidate.get(task["segment_id"], {}), min_confidence)
+            cloud_images = images
+            try:
+                parsed = retry_call(
+                    lambda: _call_bailian_multimodal_json(
+                        api_key, model, _prompt(task), cloud_images, timeout=timeout),
+                    attempts=2 if phase == "unresolved_escalation" else 3,
+                    base_delay=2.0, max_delay=12.0,
+                )
+            except Exception:
+                if phase != "unresolved_escalation" or len(images) <= len(task["candidates"]) * 5:
+                    raise
+                cloud_images = _limit_images_per_candidate(images, 5)
+                parsed = retry_call(
+                    lambda: _call_bailian_multimodal_json(
+                        api_key, model, _prompt(task), cloud_images, timeout=timeout),
+                    attempts=3, base_delay=2.0, max_delay=12.0,
+                )
+            cloud_roles: dict[str, set[str]] = {}
+            for item in cloud_images:
+                cloud_roles.setdefault(item["candidate_id"], set()).update(item.get("identity_roles") or set())
+            review = _sanitize_review(
+                task, parsed, cloud_roles, min_confidence)
+            review["review_phase"] = phase
+            review["frames_per_candidate"] = len(task["candidates"][0].get("times", []))
+            review["cloud_frames_per_candidate"] = max(
+                (sum(1 for item in cloud_images if item["candidate_id"] == candidate["shot_id"])
+                 for candidate in task["candidates"]), default=0)
+            return review
 
         workers = max(1, min(2, int(getattr(matching, "candidate_review_workers", 2))))
         if workers == 1:
@@ -317,6 +378,68 @@ def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: d
     }
     cache_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), "utf-8")
     return result
+
+
+def _merge_escalation(base: dict, escalation: dict) -> dict:
+    reviews = {str(item.get("segment_id")): item for item in base.get("reviews", [])}
+    reviews.update({str(item.get("segment_id")): item for item in escalation.get("reviews", [])})
+    ordered = [reviews[str(segment_id)] for segment_id in base.get("task_segment_ids", [])
+               if str(segment_id) in reviews]
+    errors = list(escalation.get("errors", []))
+    task_count = int(base.get("task_count") or len(base.get("task_segment_ids", [])))
+    unresolved_ids = {str(item.get("segment_id")) for item in ordered if not item.get("accepted")}
+    unresolved_ids.update(str(item.get("segment_id")) for item in errors)
+    failed = int(escalation.get("failed_count") or 0)
+    return {
+        **base,
+        "status": escalation.get("status"),
+        "reviews": ordered,
+        "errors": errors,
+        "success_count": task_count - failed,
+        "failed_count": failed,
+        "accepted_count": sum(1 for item in ordered if item.get("accepted")),
+        "unresolved_count": len(unresolved_ids),
+        "elapsed_seconds": escalation.get("elapsed_seconds"),
+        "base_elapsed_seconds": base.get("elapsed_seconds"),
+        "cache_hit": bool(base.get("cache_hit")) and bool(escalation.get("cache_hit")),
+        "escalation": {
+            "enabled": True,
+            "status": escalation.get("status"),
+            "cache_file": ESCALATION_CACHE_FILE,
+            "frame_count": escalation.get("frame_count"),
+            "task_count": escalation.get("task_count"),
+            "success_count": escalation.get("success_count"),
+            "failed_count": escalation.get("failed_count"),
+            "accepted_count": escalation.get("accepted_count"),
+            "unresolved_count": escalation.get("unresolved_count"),
+            "elapsed_seconds": escalation.get("elapsed_seconds"),
+            "cache_hit": escalation.get("cache_hit"),
+        },
+    }
+
+
+def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: dict,
+                                matching: object, visual: object, *, model: str) -> dict:
+    base = _run_candidate_visual_review_phase(
+        folder, segments, scene_map, matching, visual, model=model)
+    escalation_enabled = bool(getattr(matching, "use_candidate_review_escalation", False))
+    escalation_frames = int(getattr(matching, "candidate_review_escalation_frames", 7))
+    base_frames = int(getattr(matching, "candidate_review_frames", 3))
+    unresolved_ids = {str(item.get("segment_id")) for item in base.get("reviews", [])
+                      if not item.get("accepted")}
+    unresolved_ids.update(str(item.get("segment_id")) for item in base.get("errors", []))
+    if (not escalation_enabled or base.get("status") != "complete"
+            or escalation_frames <= base_frames or not unresolved_ids):
+        return base
+    escalation = _run_candidate_visual_review_phase(
+        folder, segments, scene_map, matching, visual, model=model,
+        cache_file=ESCALATION_CACHE_FILE,
+        frames_per_candidate=escalation_frames,
+        only_segment_ids=unresolved_ids,
+        phase="unresolved_escalation",
+    )
+    escalation["frame_count"] = escalation_frames
+    return _merge_escalation(base, escalation)
 
 
 def apply_candidate_reviews(segments: list[dict], payload: dict) -> dict:
@@ -354,4 +477,5 @@ def apply_candidate_reviews(segments: list[dict], payload: dict) -> dict:
         "unresolved_segment_ids": sorted(set(unresolved)),
         "cache_hit": bool(payload.get("cache_hit")),
         "elapsed_seconds": payload.get("elapsed_seconds"),
+        "escalation": payload.get("escalation"),
     }

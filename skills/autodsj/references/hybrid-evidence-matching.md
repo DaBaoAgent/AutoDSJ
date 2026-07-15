@@ -48,4 +48,6 @@
 - `candidate_visual_review.py` 在场景内比较最多三个候选；候选只有一个时仍可做硬确认，不得向相邻场景扩窗凑数。
 - 角色名只取 InsightFace `known_people`。云端返回的姓名不能满足角色硬条件；角色、动作、地点、道具、否定项和最低置信度必须全部通过。
 - `_candidate_visual_review.json` 对完整签名缓存；远端失败形成 `partial` 时，下次只抽取和重试失败组。
+- 基础3帧仍 unresolved 时，只对这些段使用每候选7帧的 `_candidate_visual_escalation.json`；已通过段和120帧通用索引不得重跑。超大多图请求断开时，云端均匀降为每候选5帧，本地身份核验仍保留7帧。
+- 7帧后仍缺目标人物，结论应升级为“候选镜头错误”，下一步增加同一父场景内候选镜头，而不是继续增加同一错误镜头的帧数。
 - 候选复核未完成或存在 `unresolved` 时，命令可以正常结束，但 `safe_to_render` 必须为 false。

@@ -93,6 +93,8 @@ class MatchingSettings(BaseModel):
     candidate_review_min_confidence: float = Field(0.72, ge=0.5, le=0.95)
     candidate_review_timeout_seconds: int = Field(240, ge=30, le=600)
     candidate_review_workers: int = Field(2, ge=1, le=2)
+    use_candidate_review_escalation: bool = True
+    candidate_review_escalation_frames: int = Field(7, ge=4, le=9)
 
 
 class AppSettings(BaseModel):

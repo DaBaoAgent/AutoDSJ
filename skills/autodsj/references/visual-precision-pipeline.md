@@ -2,7 +2,7 @@
 
 > 本文保留人脸库、高清单帧识别和结构化 prompt 细节；抽帧调度已由 `selective_visual.py` 接管。正式链路每集只用云端复核60～120帧，`VISUAL_SCHEMA="v3-selective-face-720p"`，禁止按固定8～10秒间隔恢复约287帧全片扫描。先读 `hybrid-evidence-matching.md`。
 
-完整的 `_selective_visual_plan.json` 与 `_source_visual_index.json` 一旦逐时间点匹配，后续 `shadow-match` 锁定该通用计划。当前候选的精细确认由 `_candidate_visual_review.json` 单独缓存：动作镜头取前/中/后三帧，角色只认人脸库，云端不得补写身份。进度状态写入前必须保留上一次完整视觉索引快照，否则“续跑”会覆盖自身缓存并退化成全量重识别。
+完整的 `_selective_visual_plan.json` 与 `_source_visual_index.json` 一旦逐时间点匹配，后续 `shadow-match` 锁定该通用计划。当前候选的精细确认由 `_candidate_visual_review.json` 单独缓存：动作镜头基础层取前/中/后三帧；仍 unresolved 的段写入独立 `_candidate_visual_escalation.json`，每候选取7帧。角色只认人脸库，云端不得补写身份。进度状态写入前必须保留上一次完整视觉索引快照，否则“续跑”会覆盖自身缓存并退化成全量重识别。
 
 改视觉索引识别精度（抽帧/prompt/人脸库）时看这张图。所有路径相对
 `D:\@kaifa\AutoDSJ\project\`。这一层是**上游**（画面识别），

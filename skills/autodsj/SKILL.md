@@ -99,7 +99,9 @@ $PY = ".\.venv\Scripts\python.exe"
 
 `shadow-match` 会生成 `_selective_visual_plan.json`。计划未完成时，候选或场景图变化会使旧视觉索引失效；一旦同一素材、同一场景地图的 60～120 帧计划完整识别，后续影子匹配必须锁定该通用计划，禁止因新视觉描述改变候选排序后反复推翻整套计划。人工修改场景地图 SHA 时锁定自动失效；普通候选变化交给 `_candidate_visual_review.json` 的独立多帧复核处理。运行 `visual` 后必须再跑一次 `shadow-match`。视觉 API 运行期间可读 `_source_visual_index.json` 的 `status/message` 监控进度。
 
-高风险候选复核最多处理 `matching.candidate_review_max_segments` 个解说句；每个候选只取物理镜头前/中/后三帧，候选数不足时允许单候选硬确认，但绝不越过 `_scene_map.json` 补候选。人物身份只认 InsightFace；云端只能确认动作、地点、道具和可见事实。完整结果可缓存，`partial` 结果续跑时只重试失败组。`candidate_visual_review_ready=false` 或任一复核句 `unresolved` 时，`safe_to_render` 必须为 false。
+高风险候选复核最多处理 `matching.candidate_review_max_segments` 个解说句；基础层每个候选取物理镜头前/中/后三帧，候选数不足时允许单候选硬确认，但绝不越过 `_scene_map.json` 补候选。人物身份只认 InsightFace；云端只能确认动作、地点、道具和可见事实。完整结果可缓存，`partial` 结果续跑时只重试失败组。
+
+基础层仍 unresolved 时，默认只对这些段运行二级7帧复核（8%～92%均匀覆盖），写入 `_candidate_visual_escalation.json`，不得重跑已通过段或锁定的120帧通用索引。若21图请求被远端断开，保持本地7帧人脸核验，但云端自动均匀降为每候选5帧后重试。加帧后仍稳定出现错误人物，说明候选镜头错，应扩大同一父场景内候选数量，禁止继续无上限加帧或跨场景搜索。`candidate_visual_review_ready=false` 或任一复核句 `unresolved` 时，`safe_to_render` 必须为 false。
 
 有干净角色对白参考时启用 CAM++：
 

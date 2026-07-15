@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.candidate_visual_review import (
+    _limit_images_per_candidate,
+    _sample_times,
     _sanitize_review,
     apply_candidate_reviews,
     build_review_tasks,
@@ -15,6 +17,18 @@ from backend.vision_api import FrameSample
 
 
 class CandidateVisualReviewTests(unittest.TestCase):
+    def test_oversized_request_is_evenly_reduced_for_every_candidate(self):
+        images = [{"candidate_id": candidate, "position": position}
+                  for candidate in ("a", "b") for position in range(1, 8)]
+        reduced = _limit_images_per_candidate(images, 5)
+        self.assertEqual([(item["candidate_id"], item["position"]) for item in reduced], [
+            ("a", 1), ("a", 3), ("a", 4), ("a", 5), ("a", 7),
+            ("b", 1), ("b", 3), ("b", 4), ("b", 5), ("b", 7),
+        ])
+
+    def test_escalation_sampling_adds_near_boundary_frames(self):
+        self.assertEqual(_sample_times(0, 10, 7), [0.8, 2.2, 3.6, 5.0, 6.4, 7.8, 9.2])
+
     def _segment(self):
         return {
             "segment_id": "seg-18",
@@ -136,6 +150,32 @@ class CandidateVisualReviewTests(unittest.TestCase):
             self.assertEqual(result["resumed_count"], 1)
             self.assertEqual(result["success_count"], 2)
             self.assertEqual(cloud.call_count, 1)
+
+    def test_escalation_reruns_only_unresolved_and_replaces_verdict(self):
+        base = {
+            "status": "complete", "task_count": 2, "task_segment_ids": ["a", "b"],
+            "cache_hit": True, "elapsed_seconds": 10,
+            "reviews": [{"segment_id": "a", "accepted": True},
+                        {"segment_id": "b", "accepted": False}], "errors": [],
+        }
+        escalation = {
+            "status": "complete", "task_count": 1, "success_count": 1, "failed_count": 0,
+            "accepted_count": 1, "unresolved_count": 0, "elapsed_seconds": 3,
+            "cache_hit": False, "reviews": [{"segment_id": "b", "accepted": True}], "errors": [],
+        }
+        matching = SimpleNamespace(
+            use_candidate_review_escalation=True,
+            candidate_review_frames=3,
+            candidate_review_escalation_frames=7,
+        )
+        with patch("backend.candidate_visual_review._run_candidate_visual_review_phase",
+                   side_effect=[base, escalation]) as phase:
+            result = run_candidate_visual_review(Path("."), [], {}, matching, SimpleNamespace(), model="test")
+        self.assertEqual(phase.call_count, 2)
+        self.assertEqual(phase.call_args_list[1].kwargs["only_segment_ids"], {"b"})
+        self.assertEqual(phase.call_args_list[1].kwargs["frames_per_candidate"], 7)
+        self.assertEqual(result["accepted_count"], 2)
+        self.assertEqual(result["unresolved_count"], 0)
 
 
 if __name__ == "__main__":

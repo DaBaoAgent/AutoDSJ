@@ -226,6 +226,13 @@ def cmd_shadow_match(args: argparse.Namespace) -> None:
     print(f"  candidate compare: {candidate.get('status', 'pending')} | "
           f"accepted {candidate.get('accepted', 0)} / unresolved {candidate.get('unresolved', 0)}"
           f" -> {folder / '_candidate_visual_review.json'}")
+    escalation = candidate.get("escalation") or {}
+    if escalation.get("enabled"):
+        print(f"  unresolved escalation: {escalation.get('task_count', 0)} segments x "
+              f"{escalation.get('frame_count', 0)} frames/candidate | "
+              f"accepted {escalation.get('accepted_count', 0)} / "
+              f"unresolved {escalation.get('unresolved_count', 0)}"
+              f" -> {folder / '_candidate_visual_escalation.json'}")
     formal_ready = bool(
         summary.get("total_unresolved", summary.get("unresolved", 0)) == 0
         and summary.get("visual_review_ready")
