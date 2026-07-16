@@ -1,4 +1,4 @@
 interface:
-  display_name: "DY全自动智能剪辑"
+  display_name: "AutoDSJ"
   short_description: "完整场景约束、混合检索、智能匹配与自动发布交付的影视剪辑"
   default_prompt: "Use $autodsj to run the full constrained drama-editing workflow and deliver a clean release package."
