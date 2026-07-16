@@ -1,0 +1,15 @@
+.git
+.venv
+.pytest_cache
+__pycache__
+runtime
+data
+config
+*.log
+*.pid
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.wav
+*.mp3

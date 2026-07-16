@@ -1,0 +1,13 @@
+services:
+  autodsj:
+    build:
+      context: .
+    image: autodsj:local
+    environment:
+      HOME: /home/autodsj
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./data:/data
+      - ./config:/app/config
+    working_dir: /app
+    command: doctor

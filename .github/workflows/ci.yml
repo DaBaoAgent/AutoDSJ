@@ -1,0 +1,54 @@
+name: Verify and package
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate canonical skill
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("skills/autodsj/SKILL.md").read_text(encoding="utf-8")
+          assert re.match(r"^---\nname: autodsj\ndescription: [^\n]+\n---", text)
+          PY
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Build Docker image
+        run: docker build --tag autodsj:ci .
+      - name: Package canonical skill
+        run: tar -czf autodsj-skill.tar.gz skills/autodsj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autodsj-skill
+          path: autodsj-skill.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package skill
+        run: tar -czf autodsj-skill.tar.gz skills/autodsj
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: autodsj-skill.tar.gz

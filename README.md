@@ -1,5 +1,32 @@
 # AutoDSJ 工作流
 
+## Agent Skill + Docker + Community
+
+`skills/autodsj` is the canonical Agent Skill for Codex, Hermes, OpenCode, and OpenClaw. Install it from a checked-out repository; never edit an installed copy directly:
+
+```powershell
+python scripts\install_autodsj_skill.py --agent all
+python scripts\install_autodsj_skill.py --agent all --check
+```
+
+Use `--agent codex|hermes|opencode|openclaw|shared` to install one target. `shared` installs to `~/.agents/skills`, which OpenCode and OpenClaw can discover as an agent-compatible root. The source remains versioned with the application, so every GitHub pull or push carries the matching skill.
+
+### Docker one-command setup
+
+Install and start Docker Desktop once, then run:
+
+```powershell
+.\scripts\docker-doctor.ps1
+```
+
+It creates local `data/` and `config/` directories, builds the image, and verifies the CLI. Put an episode folder below `data/`, then invoke the normal command through Docker:
+
+```powershell
+docker compose run --rm autodsj run --folder /data/episode-01 --hierarchical-match
+```
+
+Configuration and source media stay on the host and are not included in the image or Git history. CI validates the skill, tests the project, and builds the Docker image on every pull request and push. Creating and pushing a `v*` tag additionally publishes a GitHub Release containing `autodsj-skill.tar.gz`.
+
 面向电视剧、短剧解说的单线自动剪辑管线。正式成片只允许以下路径：
 
 `文案审校 → 字幕/剧本索引 → 完整大场景地图 → 事件/物理镜头索引 → 父段全局序列解码 → 60～240帧选择性云端视觉复核 → 场景门禁 → Qwen 克隆配音 → 渲染 → 发布交付门禁`

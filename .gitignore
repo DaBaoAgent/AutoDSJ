@@ -51,4 +51,5 @@ Thumbs.db
 Desktop.ini
 *.swp
 *.tmp
+.tmp-skill-install/
 *.bak
