@@ -68,11 +68,11 @@ class VisualSettings(BaseModel):
     face_threshold: float = Field(0.38, ge=0.20, le=0.80)  # 余弦阈值，越高越严
     face_min_size: int = Field(46, ge=20, le=400)  # 人脸框最小边(px)，太小不信
     face_det_size: int = Field(640, ge=320, le=1280)  # 检测输入尺寸
-    # Formal pipeline uses a bounded candidate-driven cloud review. The 2026-07
-    # precision profile doubles the previous 30/45/60 budget to 60/90/120.
-    selective_target_frames: int = Field(90, ge=60, le=120)
-    selective_min_frames: int = Field(60, ge=60, le=120)
-    selective_max_frames: int = Field(120, ge=60, le=120)
+    # Formal pipeline uses a bounded candidate-driven cloud review.  The
+    # precision profile can adapt from 60 to 240 frames for complex episodes.
+    selective_target_frames: int = Field(120, ge=60, le=240)
+    selective_min_frames: int = Field(60, ge=60, le=240)
+    selective_max_frames: int = Field(240, ge=60, le=240)
 
     @model_validator(mode="after")
     def normalize_selective_frame_budget(self):

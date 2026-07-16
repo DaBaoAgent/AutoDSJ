@@ -1,6 +1,6 @@
 ---
 name: autodsj
-description: Windows 上的 AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和60～120帧选择性云端视觉复核。
+description: Windows 上的 AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和60～240帧选择性云端视觉复核。
 ---
 
 # AutoDSJ 工作流
@@ -91,13 +91,13 @@ $PY = ".\.venv\Scripts\python.exe"
 
 固定层级：`大场景 → 连续事件块 → 物理镜头 → 动作瞬间`。
 
-固定证据顺序：SRT/审校剧本 BM25 → 文本向量 → 可选 CAM++ 角色声纹 → 父段 Viterbi 全局序列 → 60～120 帧选择性云端视觉复核 → 高风险候选前/中/后三帧对比。所有证据只能在父场景内排序，不能将镜头拉到场景外。详细契约见 `references/hybrid-evidence-matching.md`。
+固定证据顺序：SRT/审校剧本 BM25 → 文本向量 → 可选 CAM++ 角色声纹 → 父段 Viterbi → 60～240 帧选择性云端视觉复核 → 高风险候选前/中/后三帧对比。所有证据只能在父场景内排序，不能将镜头拉到场景外。详细契约见 `references/hybrid-evidence-matching.md`。
 
 `narration_intent.py` 必须区分检索扩展词和视觉硬条件。关系“靠近”、心理“后退”等隐喻可以辅助文本召回，但不得写进 `hard_requirements.actions`；只有明确可见动词、人物、地点和道具才能成为 `must_have`。显式“不是/并非/不要/没有/而非”写入 `must_not_have`，不得反向扩展成正向要求。
 
 时间线固定使用两轮分配：第一轮在全部候选中选择全局未用画面；只有第一轮完全无解时，父段计划才允许第二轮复用已引用的原片对白画面。`planning_summary.strict_fresh` 应尽量等于解说镜头数，`source_reuse_fallback` 应为 0 或极小。广告区在两轮中都是绝对硬禁区，父段计划、人工 override 和复用降级均不得绕过。
 
-`shadow-match` 会生成 `_selective_visual_plan.json`。计划未完成时，候选或场景图变化会使旧视觉索引失效；一旦同一素材、同一场景地图的 60～120 帧计划完整识别，后续影子匹配必须锁定该通用计划，禁止因新视觉描述改变候选排序后反复推翻整套计划。人工修改场景地图 SHA 时锁定自动失效；普通候选变化交给 `_candidate_visual_review.json` 的独立多帧复核处理。运行 `visual` 后必须再跑一次 `shadow-match`。视觉 API 运行期间可读 `_source_visual_index.json` 的 `status/message` 监控进度。
+`shadow-match` 会生成 `_selective_visual_plan.json`。计划按风险在 60/90/120/180/240 帧间自主选择（上限 240）；计划未完成时，候选或场景图变化会使旧视觉索引失效；一旦同一素材、同一场景地图的计划完整识别，后续影子匹配必须锁定该通用计划，禁止因新视觉描述改变候选排序后反复推翻整套计划。人工修改场景地图 SHA 时锁定自动失效；普通候选变化交给 `_candidate_visual_review.json` 的独立多帧复核处理。运行 `visual` 后必须再跑一次 `shadow-match`。视觉 API 运行期间可读 `_source_visual_index.json` 的 `status/message` 监控进度。
 
 高风险候选复核最多处理 `matching.candidate_review_max_segments` 个解说句；基础层每个候选取物理镜头前/中/后三帧，候选数不足时允许单候选硬确认，但绝不越过 `_scene_map.json` 补候选。人物身份只认 InsightFace；云端只能确认动作、地点、道具和可见事实。完整结果可缓存，`partial` 结果续跑时只重试失败组。
 
@@ -178,7 +178,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 - 整段乱跳：先查 `_scene_map.json` 和 `parent_scene_plans`，不要扩大时间窗。
 - 人物错：检查父场景是否选错，再补人脸参考照。
 - 动作错：检查事件块、物理镜头的多关键帧和 SRT，不得跳出父场景找高分帧。
-- 改了文案：重跑脚本表与 `shadow-match`。若新的 `_selective_visual_plan.json` 使视觉索引过期，再跑默认 `visual`（仍只有60～120帧），不要恢复密集全片扫描。
+- 改了文案：重跑脚本表与 `shadow-match`。若新的 `_selective_visual_plan.json` 使视觉索引过期，再跑默认 `visual`（风险自适应60～240帧），不要恢复固定间隔密集全片扫描。
 - 匹配慢：先检查 `_event_text_embeddings.json` 和 `_query_text_embeddings.json` 是否存在；内容不变时第六集93镜实测重匹配约7秒。
 - 多集任务：串行渲染，不要同时吃满笔记本 CPU/内存/磁盘。
 - **场景地图覆盖空洞**：`validate_scene_map` 报 `覆盖存在空洞` 时，常见原因：(a) `coverage_ranges` 包含了没有视觉帧的广告区间——把广告区从 `coverage_ranges` 移除，或拆成多段 `[[150, 978], [1001, 2668]]`；(b) 某场景 `ranges` 结尾与下个场景开头有间隔——逐场景检查 `scenes[].ranges` 的连续性，确保相邻场景首尾相接（允许广告区打断）。`excluded_ranges` 不影响覆盖校验，只影响匹配，广告区必须从 `coverage_ranges` 移出而非只写在 `excluded_ranges`。
@@ -204,7 +204,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 | 引导 scaffold（TTS+匹配） | 5-10分钟 | 百炼 TTS 偶尔 SSL 重试 |
 | 场景地图编写 | 1-2分钟 | execute_code 一次性完成 |
 | events + shadow-match | 2-5分钟 | 文本嵌入是主要开销 |
-| 选择性 visual（60～120帧） | 5-25分钟 | 取决于帧数、并发与云端长尾；可续跑 |
+| 选择性 visual（60～240帧） | 5-45分钟 | 取决于帧数、并发与云端长尾；可续跑 |
 | shadow-match 再跑 | 2-3分钟 | |
 | 预跑 + 正式渲染 | 20-40分钟 | TTS 复用缓存 + FFmpeg 编码 |
 
@@ -225,10 +225,10 @@ $PY autodsj.py prepare --folder "<单集文件夹>"
 ```
 
 该命令并行建立脚本表与物理镜头索引，生成事件索引、
-`_scene_map.draft.json` 和风险自适应的 60/90/120 帧云端视觉计划，再以有界并发执行
+`_scene_map.draft.json` 和风险自适应的 60/90/120/180/240 帧云端视觉计划，再以有界并发执行
 稀疏抽帧和批量视觉识别。视觉完成后自动把识别证据回填到镜头/事件索引，不重跑镜头边界。
 
 草案始终为 `coverage_reviewed=false`，不得直接用于正式成片。人工核对完整覆盖、场景边界、
 广告排除和父段计划后，另存为 `_scene_map.json` 并设置 `coverage_reviewed=true`。
 只生成索引和草案时使用 `autodsj.py prepare --skip-visual`；显式固定视觉预算时使用
-`--target-frames 60..120`，否则保持风险自适应。
+`--target-frames 60..240`，否则保持风险自适应。

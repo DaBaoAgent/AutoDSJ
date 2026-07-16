@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 
 PLAN_FILE = "_selective_visual_plan.json"
+MIN_SELECTIVE_FRAMES = 60
+MAX_SELECTIVE_FRAMES = 240
 
 
 def _load(path: Path) -> dict:
@@ -77,8 +79,8 @@ def _script_segments(folder: Path) -> list[dict]:
 def resolve_visual_target(*, requested: int, preferred: int, minimum: int, maximum: int,
                           scene_count: int, segments: list[dict]) -> tuple[int, dict]:
     """Choose a bounded visual budget from scene complexity and match risk."""
-    minimum = max(1, min(int(minimum), 120))
-    maximum = max(minimum, min(int(maximum), 120))
+    minimum = max(MIN_SELECTIVE_FRAMES, min(int(minimum), MAX_SELECTIVE_FRAMES))
+    maximum = max(minimum, min(int(maximum), MAX_SELECTIVE_FRAMES))
     preferred = max(minimum, min(int(preferred), maximum))
     if int(requested or 0) > 0:
         fixed = max(minimum, min(int(requested), maximum))
@@ -97,12 +99,20 @@ def resolve_visual_target(*, requested: int, preferred: int, minimum: int, maxim
              + min(8, action_count) * 0.9
              + min(6, ambiguous_count) * 1.3
              + min(8, acting_count) * 0.25)
+    # More scenes, actions and close candidate margins earn progressively more
+    # coverage.  This preserves the economical 60-frame path for simple
+    # episodes while allowing difficult ones to reach the 240-frame ceiling.
     if score < 3.0 and scene_count <= 8:
         target, level = minimum, "low"
-    elif score < 9.0 and scene_count <= 15:
+    elif score < 6.0 and scene_count <= 12:
+        target, level = minimum + round((preferred - minimum) * 0.5), "guarded"
+    elif score < 10.0 and scene_count <= 18:
         target, level = preferred, "medium"
+    elif score < 15.0 and scene_count <= 24:
+        target, level = preferred + round((maximum - preferred) * 0.5), "high"
     else:
-        target, level = maximum, "high"
+        target, level = maximum, "critical"
+    target = max(minimum, min(target, maximum))
     return target, {
         "mode": "adaptive", "score": round(score, 3), "level": level,
         "scene_count": scene_count, "action_segments": action_count,
@@ -110,8 +120,8 @@ def resolve_visual_target(*, requested: int, preferred: int, minimum: int, maxim
     }
 
 
-def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int = 90,
-                                minimum: int = 60, maximum: int = 120,
+def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int = 120,
+                                minimum: int = MIN_SELECTIVE_FRAMES, maximum: int = MAX_SELECTIVE_FRAMES,
                                 segments: list[dict] | None = None) -> dict:
     """Choose a bounded set of frames after text/scene narrowing.
 
@@ -120,8 +130,8 @@ def build_selective_visual_plan(folder: Path, *, target: int = 0, preferred: int
     macro scene, so silent events still retain visual coverage.
     """
     folder = folder.resolve()
-    minimum = max(1, min(int(minimum), 120))
-    maximum = max(minimum, min(int(maximum), 120))
+    minimum = max(MIN_SELECTIVE_FRAMES, min(int(minimum), MAX_SELECTIVE_FRAMES))
+    maximum = max(minimum, min(int(maximum), MAX_SELECTIVE_FRAMES))
     scene_map_path = folder / "_scene_map.json"
     if not scene_map_path.exists():
         scene_map_path = folder / "_scene_map.draft.json"
@@ -256,8 +266,8 @@ def visual_index_matches_plan(folder: Path) -> bool:
                for item in index.get("source_signature", [])
                if int(item.get("source_index", 1)) == 1]
     frame_count = int(index.get("frame_count") or len(index.get("frames", [])) or 0)
-    minimum = max(1, int(plan.get("minimum") or 60))
-    maximum = min(120, max(minimum, int(plan.get("maximum") or 120)))
+    minimum = max(MIN_SELECTIVE_FRAMES, int(plan.get("minimum") or MIN_SELECTIVE_FRAMES))
+    maximum = min(MAX_SELECTIVE_FRAMES, max(minimum, int(plan.get("maximum") or MAX_SELECTIVE_FRAMES)))
     return bool(
         minimum <= len(times) <= maximum
         and times == indexed

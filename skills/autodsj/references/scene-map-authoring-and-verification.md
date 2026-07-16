@@ -16,7 +16,7 @@ preflight → visual → script
   → run --skip-visual --hierarchical-match              # 正式成片
 ```
 
-视觉复核现在是候选驱动的60～120帧云端复核，不再按8.86秒固定间隔扫约287帧。先用 SRT、
+视觉复核现在是候选驱动、风险自适应的60～240帧云端复核，不再按8.86秒固定间隔扫约287帧。先用 SRT、
 剧本和物理镜头关键图写完整场景地图，`shadow-match` 生成
 `_selective_visual_plan.json` 后再运行 `visual`。后台运行时仍可用
 `_source_visual_index.json` 的 `success_count/frame_count/status` 监控。

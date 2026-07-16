@@ -27,7 +27,7 @@ class SelectiveVisualTests(unittest.TestCase):
         self.assertEqual(low, 60)
         self.assertEqual(low_meta["level"], "low")
         self.assertEqual(high, 120)
-        self.assertEqual(high_meta["level"], "high")
+        self.assertEqual(high_meta["level"], "critical")
 
     def test_explicit_budget_override_is_preserved(self):
         target, meta = resolve_visual_target(
@@ -36,6 +36,18 @@ class SelectiveVisualTests(unittest.TestCase):
         )
         self.assertEqual(target, 74)
         self.assertEqual(meta["mode"], "fixed")
+
+    def test_critical_risk_can_use_240_frame_ceiling(self):
+        segments = [{
+            "intent": {"actions": ["摔倒"], "state": "acting"},
+            "candidate_events": [{"score": 0.51}, {"score": 0.49}],
+        } for _ in range(12)]
+        target, meta = resolve_visual_target(
+            requested=0, preferred=120, minimum=60, maximum=240,
+            scene_count=25, segments=segments,
+        )
+        self.assertEqual(target, 240)
+        self.assertEqual(meta["level"], "critical")
 
     def test_plan_is_bounded_and_covers_each_macro_scene(self):
         with tempfile.TemporaryDirectory() as value:

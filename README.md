@@ -2,9 +2,9 @@
 
 面向电视剧、短剧解说的单线自动剪辑管线。正式成片只允许以下路径：
 
-`文案审校 → 字幕/剧本索引 → 完整大场景地图 → 事件/物理镜头索引 → 父段全局序列解码 → 60～120帧选择性云端视觉复核 → 场景门禁 → Qwen 克隆配音 → 渲染 → 发布交付门禁`
+`文案审校 → 字幕/剧本索引 → 完整大场景地图 → 事件/物理镜头索引 → 父段全局序列解码 → 60～240帧选择性云端视觉复核 → 场景门禁 → Qwen 克隆配音 → 渲染 → 发布交付门禁`
 
-核心原则不是在整集里逐句乱搜，也不是先做数百帧全片视觉扫描。先用 SRT、审校剧本和场景知识把整段解说缩到大场景/事件块，再以父段为单位做全局连续序列解码，最后只对歧义候选、动作镜头和场景覆盖点复核 60～120 帧。
+核心原则不是在整集里逐句乱搜，也不是先做固定间隔的全片视觉扫描。先用 SRT、审校剧本和场景知识把整段解说缩到大场景/事件块，再以父段为单位做全局连续序列解码，最后按风险对歧义候选、动作镜头和场景覆盖点复核 60～240 帧。
 
 ## 唯一正式管线
 
@@ -33,7 +33,7 @@
 ├── _source_event_index.json
 ├── _subtitle_event_index.json
 ├── _source_voice_index.json          # 可选：CAM++ 说话人/角色声纹
-├── _selective_visual_plan.json       # 每集 60～120 帧云端复核计划
+├── _selective_visual_plan.json       # 每集 60～240 帧云端复核计划
 ├── ★ 分层接管预演报告.json
 ├── ★ 成片.mp4
 ├── ★ 字幕.srt
@@ -76,7 +76,7 @@ cd D:\@kaifa\AutoDSJ\project
 
 它会并行建立脚本表与物理镜头索引，继续生成事件索引、`_scene_map.draft.json`
 场景草案和自适应视觉复核计划，并以有界并发完成稀疏抽帧及批量视觉识别。视觉预算默认
-按风险在 60/90/120 帧间选择；只有显式传入 `--target-frames N` 才固定帧数。视觉完成后会
+按风险在 60/90/120/180/240 帧间选择；只有显式传入 `--target-frames N` 才固定帧数。视觉完成后会
 自动把人物/动作描述回填到镜头及事件索引，不会重新检测镜头边界。
 
 场景草案永远保持 `coverage_reviewed=false`，不会覆盖正式 `_scene_map.json`。必须人工核对
@@ -177,7 +177,7 @@ cd D:\@kaifa\AutoDSJ\project
 2. `text-embedding-v4` 补足解说概括与字幕字面之间的语义差，事件和查询向量均按内容签名缓存；
 3. CAM++ 在 SRT 对白区间内与角色参考音频比对，提供“谁正在说话”的声纹证据；无需跑全片 VAD/聚类；
 4. 父段 Viterbi 解码整组候选，奖励同一/相邻事件的顺序推进，重罚倒序、跨大场景跳转；
-5. 只对动作、低分差歧义候选和每个大场景覆盖点调用云端视觉模型，单集硬限制 60～120 帧。
+5. 只对动作、低分差歧义候选和每个大场景覆盖点调用云端视觉模型，单集硬限制 60～240 帧。
 
 `shadow-match` 会写出 `_selective_visual_plan.json`。候选、场景图或计划时间变化后，旧视觉索引会自动失效；重新执行 `visual` 后再跑一次 `shadow-match`，让识别结果进入最终候选。任何证据都只能在父场景内排序，不能把候选带出场景边界。
 
@@ -230,9 +230,9 @@ uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
     "narration_source_volume": 0
   },
   "visual": {
-    "selective_target_frames": 90,
+    "selective_target_frames": 120,
     "selective_min_frames": 60,
-    "selective_max_frames": 120
+    "selective_max_frames": 240
   },
   "matching": {
     "use_dense_text": true,
@@ -296,7 +296,7 @@ backend/event_index.py          大场景内连续事件块
 backend/text_retriever.py       SRT/审校剧本 BM25＋向量混合检索
 backend/voice_index.py          本地 CAM++ 字幕区间角色声纹证据
 backend/sequence_decoder.py     父段候选 Viterbi 全局序列解码
-backend/selective_visual.py     候选驱动 60～120 帧云端视觉复核计划
+backend/selective_visual.py     候选驱动 60～240 帧云端视觉复核计划
 backend/hierarchical_matcher.py 分层候选与影子报告
 backend/timeline_planner.py     主场景/尾句承接计划
 backend/cleanup.py              安全清理可重建产物

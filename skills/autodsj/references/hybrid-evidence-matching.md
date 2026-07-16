@@ -2,7 +2,7 @@
 
 ## 正式数据流
 
-`SRT＋场景图＋审校剧本 → 结构化视觉意图 → 事件文本索引 → BM25＋text-embedding-v4 → CAM++可选声纹 → 父段Viterbi → 60～120帧通用复核 → 候选多帧对比`
+`SRT＋场景图＋审校剧本 → 结构化视觉意图 → 事件文本索引 → BM25＋text-embedding-v4 → CAM++可选声纹 → 父段Viterbi → 60～240帧通用复核 → 候选多帧对比`
 
 ## 文本主检索
 
@@ -25,9 +25,9 @@
 - `backend/timeline_planner.py` 强优先 `sequence_selected` 候选；只有时长不足或素材冲突时才回退次选。
 - 场景地图仍是最高硬约束：主场景整段连续，只有更短尾句组可承上启下。
 
-## 60～120帧选择性云端复核
+## 60～240帧选择性云端复核
 
-- `shadow-match` 生成 `_selective_visual_plan.json`；默认90帧，最少60、最多120。
+- `shadow-match` 生成 `_selective_visual_plan.json`；默认按风险自主选择 60/90/120/180/240 帧，最少60、最多240。
 - 优先复核动作/非说话状态、Top-2事件分差小的歧义镜头和人工范围；同时为每个完整大场景至少保留中心覆盖点。
 - `autodsj.py visual` 按不规则时间点抽帧。计划时间与 `_source_visual_index.json.source_signature` 不一致时，旧索引自动判过期。
 - 禁止把 `--interval` 密集抽帧用于正式链路；它只可用于明确的诊断实验。
@@ -37,7 +37,7 @@
 - `★ 分层影子匹配报告.json.matcher_schema == v3-hybrid-text-campplus-viterbi`。
 - `planning_summary.sequence_decoder.decoded_groups == total_groups`。
 - `planning_summary.unresolved == 0`。
-- `60 <= _selective_visual_plan.json.frame_count <= 120`。
+- `60 <= _selective_visual_plan.json.frame_count <= 240`。
 - 第二次相同内容重匹配应命中两类文本向量缓存；若仍慢，先查缓存签名而不是增加视觉帧。
 
 ## 候选多帧硬确认
@@ -48,7 +48,7 @@
 - `candidate_visual_review.py` 基础层在场景内比较最多三个候选；候选只有一个时仍可做硬确认，不得向相邻场景扩窗凑数。基础层 unresolved 后，二级复核把同一场景内候选扩大到五个。
 - 角色名只取 InsightFace `known_people`。云端返回的姓名不能满足角色硬条件；角色、动作、地点、道具、否定项和最低置信度必须全部通过。
 - `_candidate_visual_review.json` 对完整签名缓存；远端失败形成 `partial` 时，下次只抽取和重试失败组。
-- 基础3候选×3帧仍 unresolved 时，只对这些段使用5候选×每候选7帧的 `_candidate_visual_escalation.json`；已通过段和120帧通用索引不得重跑。超大多图请求断开时，云端均匀降为每候选5帧、再降为3帧，本地身份核验仍保留7帧；基础请求断开时可降为每候选2帧、再降为1帧，但候选数量和身份硬门禁不变。
+- 基础3候选×3帧仍 unresolved 时，只对这些段使用5候选×每候选7帧的 `_candidate_visual_escalation.json`；已通过段和锁定的通用索引不得重跑。超大多图请求断开时，云端均匀降为每候选5帧、再降为3帧，本地身份核验仍保留7帧；基础请求断开时可降为每候选2帧、再降为1帧，但候选数量与身份硬门禁不变。
 - 场景地图或视觉证据改变后，只能复用候选 ID 顺序与帧数完全一致的旧复核；候选列表有变化必须重新请求云端，不能仅按 segment_id 盲用缓存。
 - 7帧后仍缺目标人物，结论应升级为“候选镜头错误”，下一步增加同一父场景内候选镜头，而不是继续增加同一错误镜头的帧数。
 - 候选复核未完成或存在 `unresolved` 时，命令可以正常结束，但 `safe_to_render` 必须为 false。
