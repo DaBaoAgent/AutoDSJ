@@ -87,6 +87,49 @@ class AdFilterTests(unittest.TestCase):
             self.assertEqual(intervals[0]["end"], 1492.0)
             self.assertIn("vision", intervals[0]["sources"])
 
+    def test_wall_notices_are_not_treated_as_inserted_ads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            (folder / "_source_visual_index.json").write_text(
+                json.dumps({"frames": [
+                    {
+                        "time": 188.833,
+                        "interval": 8.78,
+                        "caption": "男子走进昏暗的老式房间走廊深处",
+                        "props": "墙上的小广告（办证刻章、搬家保洁）",
+                    },
+                    {
+                        "time": 950.56,
+                        "interval": 8.78,
+                        "caption": "方协文在夜晚室外抬头仰望",
+                        "props": "背景墙上的红色办证广告字迹",
+                    },
+                ]}, ensure_ascii=False),
+                "utf-8",
+            )
+
+            intervals = detect_ad_intervals(folder, write_index=False)
+
+            self.assertEqual(intervals, [])
+
+    def test_explicit_inserted_commercial_remains_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            (folder / "_source_visual_index.json").write_text(
+                json.dumps({"frames": [{
+                    "time": 1039.559,
+                    "interval": 8.78,
+                    "caption": "男子仰头喝饮料，这是电视剧播放过程中的广告插播画面",
+                    "scene": "广告画面",
+                }]}, ensure_ascii=False),
+                "utf-8",
+            )
+
+            intervals = detect_ad_intervals(folder, write_index=False)
+
+            self.assertEqual(len(intervals), 1)
+            self.assertIn("vision", intervals[0]["sources"])
+
 
 if __name__ == "__main__":
     unittest.main()

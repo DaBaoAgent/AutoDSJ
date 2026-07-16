@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from backend.event_index import build_event_index
+from backend.ad_filter import detect_ad_intervals
 from backend.candidate_visual_review import apply_candidate_reviews, run_candidate_visual_review
 from backend.embed_match import dashscope_key
 from backend.narration_intent import ACTION_VOCAB, parse_intent
@@ -404,12 +405,11 @@ def build_shadow_report(folder: Path, matching: object | None = None,
 
     source_blocked = [(float(item.get("clip_start", 0)), float(item.get("clip_end", 0)))
                       for item in old.get("segments", []) if item.get("row_type") == "source_clip"]
-    ad_blocked: list[tuple[float, float]] = []
-    ad_path = folder / "_source_ad_intervals.json"
-    if ad_path.exists():
-        ad_payload = _load(ad_path)
-        ad_items = ad_payload.get("intervals", []) if isinstance(ad_payload, dict) else ad_payload
-        ad_blocked.extend((float(item["start"]), float(item["end"])) for item in ad_items)
+    # Recompute from the current subtitle and visual indexes. Reading a stale
+    # cache here can let shadow-match approve footage that the formal allocator
+    # later rejects after it refreshes the same ad index.
+    ad_items = detect_ad_intervals(folder)
+    ad_blocked = [(float(item["start"]), float(item["end"])) for item in ad_items]
     sequence_summary = decode_parent_sequences(output_segments)
     planning_summary = plan_timeline(output_segments, source_blocked, hard_blocked=ad_blocked)
     planning_summary["sequence_decoder"] = sequence_summary

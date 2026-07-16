@@ -13,12 +13,49 @@ _VISUAL_AD_MARKERS = (
     "二维码", "logo展示", "产品展示", "展示产品", "产品细节",
 )
 
+_STRONG_VISUAL_AD_MARKERS = tuple(
+    marker for marker in _VISUAL_AD_MARKERS if marker not in {"广告", "广告牌"}
+)
+
+_COMMERCIAL_VISUAL_CUES = (
+    "广告插播", "插播画面", "广告画面", "广告条", "品牌广告",
+    "品牌展示", "商品展示", "饮料广告", "产品宣传", "商业广告",
+)
+
+_SCENE_POSTER_CUES = (
+    "小广告", "办证", "刻章", "搬家保洁", "开锁", "墙上广告",
+    "墙上的广告", "柱子上有", "广告字迹",
+)
+
 _SUBTITLE_AD_MARKERS = (
     "唯品会", "邀您", "邀请您", "冠名", "销量第一", "免费上门换", "搜玫瑰",
     "精彩继续", "广告之后", "马上回来", "奶粉", "阿胶浆", "本节目由",
 )
 
 _INVITE_PATTERN = re.compile(r"邀(?:请)?(?:你|您|我们)?.{0,12}(?:观看|收看|继续|入夏)")
+
+
+def _visual_ad_marker(evidence: str) -> str:
+    """Return a commercial marker without treating scenery posters as ads.
+
+    Vision captions often call notices on old walls or corridor pillars
+    ``小广告``/``办证广告``. Those are observable set dressing, not an inserted
+    commercial, and must not become hard-blocked footage.
+    """
+    compact = re.sub(r"\s+", "", evidence).lower()
+    marker = next(
+        (item for item in _STRONG_VISUAL_AD_MARKERS if item.lower() in compact),
+        "",
+    )
+    if marker:
+        return marker
+    if not any(item in compact for item in ("广告", "广告牌")):
+        return ""
+    if any(cue.lower() in compact for cue in _COMMERCIAL_VISUAL_CUES):
+        return "广告"
+    if any(cue.lower() in compact for cue in _SCENE_POSTER_CUES):
+        return ""
+    return ""
 
 
 def _source_subtitles(folder: Path) -> list[Path]:
@@ -63,7 +100,7 @@ def _visual_signals(folder: Path) -> list[dict]:
     signals: list[dict] = []
     for record in records:
         evidence = " ".join(str(value) for value in record.values() if value is not None)
-        marker = next((item for item in _VISUAL_AD_MARKERS if item.lower() in evidence.lower()), "")
+        marker = _visual_ad_marker(evidence)
         if not marker:
             continue
         try:

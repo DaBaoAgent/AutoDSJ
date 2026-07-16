@@ -11,8 +11,12 @@ RuntimeError: 素材区间命中广告禁区：2603.733-2650.333 (原片行1)
 ## 根因
 
 `backend/ad_filter.py::detect_ad_intervals()` 调用 `_visual_signals()`，遍历
-`_source_visual_index.json` 每个 frame 的所有字段值，拼接后匹配 `_VISUAL_AD_MARKERS`
-元组中的关键词 `"广告"`。视觉 API（qwen3.7-plus）在描述场景陈设时会写：
+`_source_visual_index.json` 每个 frame 的所有字段值。旧实现只要匹配到
+`_VISUAL_AD_MARKERS` 中的 `"广告"` 就会封锁整个采样单元；同时旧的
+`shadow-match` 只读取已有 `_source_ad_intervals.json`，可能在影子报告通过后，
+由正式分配器重新生成不同的广告区间，导致“门禁通过、正式预跑失败”。
+
+视觉 API（qwen3.7-plus）在描述场景陈设时常写：
 
 - `props: "左侧贴有广告的柱子"` — 街景里的招贴
 - `props: "墙上贴满的小广告（开锁、办证等）"` — 老城区墙面
@@ -20,20 +24,29 @@ RuntimeError: 素材区间命中广告禁区：2603.733-2650.333 (原片行1)
 
 这些是正常剧情场景，不是商业广告，但关键词匹配无法区分语境。
 
-## 修复步骤
+## 当前修复
 
-1. 用 Python 替换 `_source_visual_index.json` 中所有 `caption/props/scene/action`
-   字段里的 `广告` → `告示`（`小告示` → `招贴`）
+1. `_visual_ad_marker()` 自动排除“小广告、办证、刻章、搬家保洁、墙面/柱子广告字迹”等场景陈设。
+2. 明确的“广告插播、广告画面、品牌/商品展示、产品宣传”等商业语境仍会被封锁。
+3. `shadow-match` 每次从当前字幕和视觉索引重新运行 `detect_ad_intervals()`，
+   使影子规划与正式分配器使用同一份广告硬约束。
 
-2. 删除 `_source_ad_intervals.json` 让它重新生成
+修改广告识别逻辑或视觉索引后，应重新运行：
 
-3. 重跑 `autodsj.py run --skip-visual --no-render`
+```powershell
+& $PY autodsj.py shadow-match --folder "<单集素材夹>"
+& $PY autodsj.py run --folder "<单集素材夹>" --skip-visual --no-render --hierarchical-match
+```
 
 ## 验证
 
 修正后广告区间应仅剩字幕触发的真实广告段（如"唯品会搜玫瑰""邀您观看"等），
 不应包含剧情场景时间范围。检查 `_source_ad_intervals.json` 的 `reasons` 字段：
-字幕信号 (`"source": "subtitle"`) 可信，纯视觉信号 (`"source": "vision"`) 需审视。
+字幕信号 (`"source": "subtitle"`) 可信；纯视觉信号 (`"source": "vision"`)
+必须能在 `reasons` 中看到明确商业语境，不能只有墙面招贴。
+
+如果旧版本仍需人工处理，才使用“把场景陈设中的广告改写为招贴/告示并删除缓存”
+的临时方法；当前版本不应再修改原始视觉索引来绕过误封。
 
 ## 本次案例（第8集《玫瑰的故事》）
 

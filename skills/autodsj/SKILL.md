@@ -190,23 +190,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 - 接管后必须分别检查解说复用和原片明确复引。解说画面与任何已用片段重叠都应先消除；只有文案明确重复引用同一句原片对白、且必须保持口型与原声时，才允许记录为必要例外。
 - 「独立爆款版」短文案出片仅 2-3 分钟——正确。成片时长 = Σ解说配音 + Σ原片对白，由文案长度决定；引导日志「解说目标约2490s(90%)」只是按原片长度的默认假设，不代表漏渲染。
 
-- **广告禁区误封**：`autodsj.py run` 报 `RuntimeError: 素材区间命中广告禁区` 时，先查 `_source_ad_intervals.json`。视觉 API 描述中的"贴满小广告的墙""贴有广告的柱子"等场景陈设词会被 `backend/ad_filter.py` 关键词匹配为广告信号，把正常剧情封掉。修复：用 Python 把 `_source_visual_index.json` 中 `caption/props/scene/action/people` 字段里的 `广告` 替换为 `招贴` 或 `告示`，再删掉 `_source_ad_intervals.json` 让它重新生成。注意 `props` 字段也常含"广告"（如"左侧贴有广告的柱子""小广告、窗台盆栽"），必须一并处理，不能只修 `caption`：
-  ```powershell
-  cd D:\@kaifa\AutoDSJ\project
-  & $PY -c "
-  import json; from pathlib import Path
-  p = Path(r'<单集素材夹>\_source_visual_index.json')
-  d = json.loads(p.read_text('utf-8'))
-  for f in d.get('frames', []):
-      for k in ('caption','props','scene','action'):
-          if isinstance(f.get(k), str) and '广告' in f[k]:
-              f[k] = f[k].replace('广告','告示').replace('小告示','招贴')
-  p.write_text(json.dumps(d, ensure_ascii=False, indent=2), 'utf-8')
-  print('done')
-  "
-  rm "<单集素材夹>\_source_ad_intervals.json"
-  ```
-  修完重跑 `autodsj.py run --skip-visual --no-render`。注意：仅修正视觉层不会丢失信息——广告区判定仍靠字幕信号（如"唯品会""搜玫瑰"等）正常工作。详细案例见 `references/ad-filter-false-positive-fix.md`。
+- **广告禁区误封**：当前 `backend/ad_filter.py` 会把“墙上的小广告、办证刻章、柱子上的广告字迹”等场景陈设排除，只把明确的广告插播、品牌/产品展示或字幕商业话术设为硬禁区；`shadow-match` 也会根据当前字幕和视觉索引重新生成 `_source_ad_intervals.json`，不得复用陈旧广告缓存。若正式预跑仍报广告冲突，检查该文件的 `reasons`：纯视觉信号必须包含明确商业语境，不能只有墙面招贴。详细诊断见 `references/ad-filter-false-positive-fix.md`。
 
 项目的完整命令与数据结构以 `D:\@kaifa\AutoDSJ\project\README.md` 为准。
 
