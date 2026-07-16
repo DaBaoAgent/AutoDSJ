@@ -229,7 +229,8 @@ def cmd_shadow_match(args: argparse.Namespace) -> None:
     escalation = candidate.get("escalation") or {}
     if escalation.get("enabled"):
         print(f"  unresolved escalation: {escalation.get('task_count', 0)} segments x "
-              f"{escalation.get('frame_count', 0)} frames/candidate | "
+              f"{escalation.get('candidates_per_segment', 0)} candidates x "
+              f"{escalation.get('frame_count', 0)} frames | "
               f"accepted {escalation.get('accepted_count', 0)} / "
               f"unresolved {escalation.get('unresolved_count', 0)}"
               f" -> {folder / '_candidate_visual_escalation.json'}")

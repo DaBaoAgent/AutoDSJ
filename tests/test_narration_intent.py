@@ -14,6 +14,7 @@ class NarrationIntentTests(unittest.TestCase):
 
     def test_extracts_fang_xiewen_and_cooking_action(self):
         value = parse_intent("方协文做饭，玫瑰等着被照顾")
+        self.assertEqual(value["subject"], "方协文")
         self.assertIn("方协文", value["characters"])
         self.assertIn("玫瑰", value["characters"])
         self.assertIn("做饭", value["actions"])
@@ -41,3 +42,17 @@ class NarrationIntentTests(unittest.TestCase):
         self.assertNotIn("拉手", value["must_have"])
         self.assertEqual(value["hard_requirements"]["actions"], [])
         self.assertFalse(value["requires_candidate_review"])
+
+    def test_object_character_is_not_forced_into_same_shot(self):
+        value = parse_intent("黄振华没有忘记苏更生")
+        self.assertEqual(value["subject"], "黄振华")
+        self.assertEqual(value["hard_requirements"]["characters"], ["黄振华"])
+
+    def test_first_mentioned_character_is_subject(self):
+        value = parse_intent("自卑让苏更生，不敢依靠黄振华")
+        self.assertEqual(value["subject"], "苏更生")
+        self.assertEqual(value["hard_requirements"]["characters"], ["苏更生"])
+
+    def test_explicit_pair_still_requires_both_characters(self):
+        value = parse_intent("可看到玫瑰和方协文")
+        self.assertEqual(value["hard_requirements"]["characters"], ["玫瑰", "方协文"])

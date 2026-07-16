@@ -73,9 +73,29 @@ def _negative_requirements(text: str) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
+def _required_visible_characters(text: str, people: list[str], subject: str) -> list[str]:
+    """Require co-presence only when the wording makes it visually explicit."""
+    if len(people) < 2:
+        return people
+    co_presence_words = ("\u4e24\u4eba", "\u4e8c\u4eba", "\u4e00\u8d77", "\u540c\u6846",
+                         "\u5f7c\u6b64", "\u76f8\u62e5", "\u7275\u624b", "\u62c9\u624b")
+    connector = any(
+        re.search(rf"{re.escape(left)}.{{0,2}}(?:\u548c|\u4e0e|\u8ddf|\u3001).{{0,2}}{re.escape(right)}", text)
+        or re.search(rf"{re.escape(right)}.{{0,2}}(?:\u548c|\u4e0e|\u8ddf|\u3001).{{0,2}}{re.escape(left)}", text)
+        for index, left in enumerate(people) for right in people[index + 1:]
+    )
+    transitive = "\u628a" in text or "\u88ab" in text
+    if connector or transitive or any(word in text for word in co_presence_words):
+        return people
+    return [subject] if subject else people[:1]
+
+
 def parse_intent(text: str, *, previous_subject: str = "") -> dict:
     text = str(text or "").strip()
-    people = [name for name in CHARACTERS if name in text]
+    people = sorted(
+        (name for name in CHARACTERS if name in text),
+        key=lambda name: text.find(name),
+    )
     subject = people[0] if people else ""
     pronouns = r"(?:^|[\uFF0C,\u3002\uFF1B;])?(?:\u4ed6|\u5979|\u5bf9\u65b9|\u7537\u4eba|\u5973\u4eba)"
     if not subject and previous_subject and re.search(pronouns, text):
@@ -89,6 +109,7 @@ def parse_intent(text: str, *, previous_subject: str = "") -> dict:
     positive_actions = [item for item in actions if item not in must_not_have]
     hard_actions = [item for item in positive_actions
                     if any(term in text for term in HARD_ACTION_TERMS.get(item, "").split())]
+    required_characters = _required_visible_characters(text, people, subject)
     positive_locations = [item for item in locations if item not in must_not_have]
     positive_objects = [item for item in objects if item not in must_not_have]
     expanded = " ".join([
@@ -97,7 +118,9 @@ def parse_intent(text: str, *, previous_subject: str = "") -> dict:
         *(LOCATION_VOCAB[location] for location in positive_locations),
         *(OBJECT_VOCAB[obj] for obj in positive_objects),
     ]).strip()
-    must_have = list(dict.fromkeys([*people, *hard_actions, *positive_locations, *positive_objects]))
+    must_have = list(dict.fromkeys([
+        *required_characters, *hard_actions, *positive_locations, *positive_objects,
+    ]))
     temporal_type = "action_sequence" if any(action in TEMPORAL_ACTIONS for action in hard_actions) else "single_frame"
     return {
         "text": text,
@@ -111,7 +134,7 @@ def parse_intent(text: str, *, previous_subject: str = "") -> dict:
         "must_have": must_have,
         "must_not_have": must_not_have,
         "hard_requirements": {
-            "characters": people,
+            "characters": required_characters,
             "actions": hard_actions,
             "locations": positive_locations,
             "objects": positive_objects,

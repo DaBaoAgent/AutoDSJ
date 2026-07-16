@@ -68,11 +68,12 @@ def _scene_hint(text: str, scene_map: dict, *, prefer_last: bool = False) -> dic
                 # it with the scene hint so the planner cannot drift to a merely
                 # related shot elsewhere in the same macro scene.
                 hinted = dict(override_scene)
+                hinted["reviewed_override"] = True
                 if item.get("range"):
                     hinted["manual_range"] = item["range"]
                 return hinted
     if override_scene:
-        return override_scene
+        return {**override_scene, "reviewed_override": True}
     best, best_score = None, 0
     for scene in scene_map.get("scenes", []):
         keyword_hits = sum(1 for word in scene.get("keywords", []) if word and word in text)
@@ -108,6 +109,18 @@ def _parent_scene_hint(parent_id: object, shot_index: object, scene_map: dict) -
                           if item.get("name") == group.get("scene")), None)
             return scene, f"plan{group_index}"
     return None, None
+
+
+def _resolve_scene_hint(planned_hint: dict | None, text_hint: dict | None) -> tuple[dict | None, bool]:
+    reviewed_override = bool(text_hint and text_hint.get("reviewed_override"))
+    # The paragraph plan is the default hard boundary.  A sentence-level
+    # scene-map override is also reviewed evidence and may deliberately
+    # represent a brief cutaway inside that paragraph.
+    hint = text_hint if reviewed_override else (planned_hint or text_hint)
+    if (planned_hint and text_hint and text_hint.get("manual_range")
+            and text_hint.get("name") == planned_hint.get("name")):
+        hint = {**planned_hint, "manual_range": text_hint["manual_range"]}
+    return hint, reviewed_override
 
 
 def _range_score(start: float, end: float, anchor_start: float, anchor_end: float) -> float:
@@ -206,10 +219,7 @@ def build_shadow_report(folder: Path, matching: object | None = None,
             previous_subject = intent["subject"]
         planned_hint, planned_group = _parent_scene_hint(pid, segment.get("shot_index"), scene_map)
         text_hint = _scene_hint(intent["text"], scene_map)
-        hint = planned_hint or text_hint
-        if (planned_hint and text_hint and text_hint.get("manual_range")
-                and text_hint.get("name") == planned_hint.get("name")):
-            hint = {**planned_hint, "manual_range": text_hint["manual_range"]}
+        hint, reviewed_override = _resolve_scene_hint(planned_hint, text_hint)
         if not hint:
             hint = previous_hint_by_parent.get(pid)
         if not hint:
@@ -225,7 +235,15 @@ def build_shadow_report(folder: Path, matching: object | None = None,
             previous_event = None
         if hint:
             previous_hint_by_parent[pid] = hint
-        continuity_group_id = f"{pid}:{planned_group or group_by_parent[pid]}"
+        override_crosses_plan = bool(
+            reviewed_override and planned_hint and hint
+            and hint.get("name") != planned_hint.get("name")
+        )
+        continuity_group = (
+            f"override{segment.get('shot_index')}" if override_crosses_plan
+            else (planned_group or group_by_parent[pid])
+        )
+        continuity_group_id = f"{pid}:{continuity_group}"
         anchor_start = float(segment.get("source_start") or 0)
         anchor_end = float(segment.get("source_end") or anchor_start + 1)
         candidate_pool = events

@@ -1,6 +1,6 @@
 import unittest
 
-from backend.hierarchical_matcher import _parent_scene_hint
+from backend.hierarchical_matcher import _parent_scene_hint, _resolve_scene_hint, _scene_hint
 
 
 class HierarchicalScenePlanTests(unittest.TestCase):
@@ -29,6 +29,21 @@ class HierarchicalScenePlanTests(unittest.TestCase):
             scene, group = _parent_scene_hint("7", shot, self.scene_map)
             self.assertEqual(scene["name"], "承上启下场景")
             self.assertEqual(group, "plan2")
+
+    def test_sentence_override_is_marked_as_reviewed_evidence(self):
+        scene_map = {
+            **self.scene_map,
+            "overrides": [{"contains": "回忆山间小屋", "scene": "承上启下场景"}],
+        }
+        scene = _scene_hint("她忽然回忆山间小屋的生活", scene_map)
+        self.assertEqual(scene["name"], "承上启下场景")
+        self.assertTrue(scene["reviewed_override"])
+        resolved, reviewed = _resolve_scene_hint(
+            {"name": "主场景", "ranges": [[10, 20]]},
+            scene,
+        )
+        self.assertEqual(resolved["name"], "承上启下场景")
+        self.assertTrue(reviewed)
 
 
 if __name__ == "__main__":

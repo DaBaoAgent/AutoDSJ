@@ -152,6 +152,20 @@ def _signature(video: Path, model: str, tasks: list[dict], matching: object, vis
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _review_matches_task(review: dict, task: dict, frames_per_candidate: int) -> bool:
+    reviewed_ids = [
+        str(item.get("shot_id") or "")
+        for item in review.get("candidates", [])
+        if isinstance(item, dict)
+    ]
+    task_ids = [str(item.get("shot_id") or "") for item in task.get("candidates", [])]
+    return (
+        str(review.get("segment_id")) == str(task.get("segment_id"))
+        and reviewed_ids == task_ids
+        and int(review.get("frames_per_candidate") or 0) == int(frames_per_candidate)
+    )
+
+
 def _prompt(task: dict) -> str:
     requirements = task["intent"].get("hard_requirements") or {}
     candidate_ids = [item["shot_id"] for item in task["candidates"]]
@@ -222,16 +236,21 @@ def _run_candidate_visual_review_phase(
     *,
     model: str,
     cache_file: str = CACHE_FILE,
+    candidates_per_segment: int | None = None,
     frames_per_candidate: int | None = None,
     only_segment_ids: set[str] | None = None,
     phase: str = "base",
 ) -> dict:
     folder = folder.resolve()
+    candidate_limit = int(
+        candidates_per_segment or getattr(matching, "candidate_review_candidates", 3)
+    )
+    frame_limit = int(frames_per_candidate or getattr(matching, "candidate_review_frames", 3))
     tasks = build_review_tasks(
         segments, scene_map,
         max_segments=int(getattr(matching, "candidate_review_max_segments", 12)),
-        candidates_per_segment=int(getattr(matching, "candidate_review_candidates", 3)),
-        frames_per_candidate=int(frames_per_candidate or getattr(matching, "candidate_review_frames", 3)),
+        candidates_per_segment=candidate_limit,
+        frames_per_candidate=frame_limit,
     )
     if only_segment_ids is not None:
         tasks = [item for item in tasks if item["segment_id"] in only_segment_ids]
@@ -248,12 +267,28 @@ def _run_candidate_visual_review_phase(
                     cached["cache_hit"] = True
                     return cached
                 cached_reviews = [item for item in cached.get("reviews", []) if isinstance(item, dict)]
+            elif (
+                cached.get("schema") == SCHEMA
+                and cached.get("phase") == phase
+                and cached.get("model") == model
+                and int(cached.get("candidates_per_segment") or 0) == candidate_limit
+                and int(cached.get("frames_per_candidate") or 0) == frame_limit
+            ):
+                current_tasks = {str(item["segment_id"]): item for item in tasks}
+                cached_reviews = [
+                    item for item in cached.get("reviews", [])
+                    if isinstance(item, dict)
+                    and str(item.get("segment_id")) in current_tasks
+                    and _review_matches_task(
+                        item, current_tasks[str(item.get("segment_id"))], frame_limit)
+                ]
         except (OSError, ValueError, TypeError):
             pass
     started = time.perf_counter()
     completed_ids = {str(item.get("segment_id")) for item in cached_reviews}
     pending_tasks = [item for item in tasks if item["segment_id"] not in completed_ids]
     base = {"schema": SCHEMA, "phase": phase, "source_signature": signature, "model": model,
+            "candidates_per_segment": candidate_limit, "frames_per_candidate": frame_limit,
             "task_count": len(tasks), "task_segment_ids": [item["segment_id"] for item in tasks],
             "cache_hit": False, "resumed_count": len(cached_reviews),
             "reviews": list(cached_reviews), "errors": []}
@@ -319,23 +354,27 @@ def _run_candidate_visual_review_phase(
             expected = sum(len(item["times"]) for item in task["candidates"])
             if len(images) != expected:
                 raise RuntimeError(f"候选帧提取不完整：{len(images)}/{expected}")
-            cloud_images = images
-            try:
-                parsed = retry_call(
-                    lambda: _call_bailian_multimodal_json(
-                        api_key, model, _prompt(task), cloud_images, timeout=timeout),
-                    attempts=2 if phase == "unresolved_escalation" else 3,
-                    base_delay=2.0, max_delay=12.0,
-                )
-            except Exception:
-                if phase != "unresolved_escalation" or len(images) <= len(task["candidates"]) * 5:
-                    raise
-                cloud_images = _limit_images_per_candidate(images, 5)
-                parsed = retry_call(
-                    lambda: _call_bailian_multimodal_json(
-                        api_key, model, _prompt(task), cloud_images, timeout=timeout),
-                    attempts=3, base_delay=2.0, max_delay=12.0,
-                )
+            limits = [len(images) // max(1, len(task["candidates"]))]
+            if phase == "unresolved_escalation" and limits[0] > 5:
+                limits.extend([5, 3])
+            elif limits[0] > 2:
+                limits.extend([2, 1])
+            limits = list(dict.fromkeys(max(1, value) for value in limits))
+            last_error: Exception | None = None
+            for index, limit in enumerate(limits):
+                cloud_images = _limit_images_per_candidate(images, limit)
+                try:
+                    parsed = retry_call(
+                        lambda: _call_bailian_multimodal_json(
+                            api_key, model, _prompt(task), cloud_images, timeout=timeout),
+                        attempts=2,
+                        base_delay=2.0, max_delay=12.0,
+                    )
+                    break
+                except Exception as exc:  # bounded payload fallback for flaky multimodal uploads
+                    last_error = exc
+            else:
+                raise last_error or RuntimeError("候选视觉复核请求失败")
             cloud_roles: dict[str, set[str]] = {}
             for item in cloud_images:
                 cloud_roles.setdefault(item["candidate_id"], set()).update(item.get("identity_roles") or set())
@@ -407,6 +446,7 @@ def _merge_escalation(base: dict, escalation: dict) -> dict:
             "status": escalation.get("status"),
             "cache_file": ESCALATION_CACHE_FILE,
             "frame_count": escalation.get("frame_count"),
+            "candidates_per_segment": escalation.get("candidates_per_segment"),
             "task_count": escalation.get("task_count"),
             "success_count": escalation.get("success_count"),
             "failed_count": escalation.get("failed_count"),
@@ -424,6 +464,10 @@ def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: d
         folder, segments, scene_map, matching, visual, model=model)
     escalation_enabled = bool(getattr(matching, "use_candidate_review_escalation", False))
     escalation_frames = int(getattr(matching, "candidate_review_escalation_frames", 7))
+    escalation_candidates = int(getattr(
+        matching, "candidate_review_escalation_candidates",
+        getattr(matching, "candidate_review_candidates", 3),
+    ))
     base_frames = int(getattr(matching, "candidate_review_frames", 3))
     unresolved_ids = {str(item.get("segment_id")) for item in base.get("reviews", [])
                       if not item.get("accepted")}
@@ -434,6 +478,7 @@ def run_candidate_visual_review(folder: Path, segments: list[dict], scene_map: d
     escalation = _run_candidate_visual_review_phase(
         folder, segments, scene_map, matching, visual, model=model,
         cache_file=ESCALATION_CACHE_FILE,
+        candidates_per_segment=escalation_candidates,
         frames_per_candidate=escalation_frames,
         only_segment_ids=unresolved_ids,
         phase="unresolved_escalation",

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from backend.candidate_visual_review import (
     _limit_images_per_candidate,
+    _review_matches_task,
     _sample_times,
     _sanitize_review,
     apply_candidate_reviews,
@@ -17,6 +18,21 @@ from backend.vision_api import FrameSample
 
 
 class CandidateVisualReviewTests(unittest.TestCase):
+    def test_cached_review_requires_same_candidate_ids_and_frame_count(self):
+        task = {
+            "segment_id": "84",
+            "candidates": [{"shot_id": "a"}, {"shot_id": "b"}],
+        }
+        review = {
+            "segment_id": "84",
+            "frames_per_candidate": 7,
+            "candidates": [{"shot_id": "a"}, {"shot_id": "b"}],
+        }
+        self.assertTrue(_review_matches_task(review, task, 7))
+        self.assertFalse(_review_matches_task(review, task, 3))
+        review["candidates"].reverse()
+        self.assertFalse(_review_matches_task(review, task, 7))
+
     def test_oversized_request_is_evenly_reduced_for_every_candidate(self):
         images = [{"candidate_id": candidate, "position": position}
                   for candidate in ("a", "b") for position in range(1, 8)]
@@ -166,6 +182,7 @@ class CandidateVisualReviewTests(unittest.TestCase):
         matching = SimpleNamespace(
             use_candidate_review_escalation=True,
             candidate_review_frames=3,
+            candidate_review_escalation_candidates=5,
             candidate_review_escalation_frames=7,
         )
         with patch("backend.candidate_visual_review._run_candidate_visual_review_phase",
@@ -173,6 +190,7 @@ class CandidateVisualReviewTests(unittest.TestCase):
             result = run_candidate_visual_review(Path("."), [], {}, matching, SimpleNamespace(), model="test")
         self.assertEqual(phase.call_count, 2)
         self.assertEqual(phase.call_args_list[1].kwargs["only_segment_ids"], {"b"})
+        self.assertEqual(phase.call_args_list[1].kwargs["candidates_per_segment"], 5)
         self.assertEqual(phase.call_args_list[1].kwargs["frames_per_candidate"], 7)
         self.assertEqual(result["accepted_count"], 2)
         self.assertEqual(result["unresolved_count"], 0)
