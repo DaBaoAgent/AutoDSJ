@@ -25,7 +25,7 @@ It creates local `data/` and `config/` directories, builds the image, and verifi
 docker compose run --rm autodsj run --folder /data/episode-01 --hierarchical-match
 ```
 
-Configuration and source media stay on the host and are not included in the image or Git history. CI validates the skill, tests the project, and builds the Docker image on every pull request and push. Creating and pushing a `v*` tag additionally publishes a GitHub Release containing `autodsj-skill.tar.gz`.
+Configuration and source media stay on the host and are not included in the image or Git history. CI validates the skill, tests the project, and builds the Docker image on every pull request and push. Creating and pushing a `v*` tag additionally publishes a GitHub Release containing `autodsj-skill.tar.gz` and the matching `ghcr.io/<owner>/autodsj:<tag>` Docker image.
 
 面向电视剧、短剧解说的单线自动剪辑管线。正式成片只允许以下路径：
 
