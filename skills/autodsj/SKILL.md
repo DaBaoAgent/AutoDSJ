@@ -214,7 +214,7 @@ uv pip install --python $PY --no-deps speakerlab==0.0.6
 **常见延时因素**：
 - 视觉 API 超时（SiliconFlow 429/500），重试可续跑
 - 百炼 TTS SSL EOF 错误，管线内置重试自动恢复
-- 广告关键词误封需手动清洗 `_source_visual_index.json` 后重跑
+- 广告误封先检查 `_source_ad_intervals.json` 的 `reasons`；当前管线会自动排除墙面小广告/办证招贴等场景陈设，无需改写视觉索引
 
 ## 新集并行准备（2026-07）
 
