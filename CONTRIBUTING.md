@@ -1,15 +1,17 @@
-# Contributing to AutoDSJ
+# 为 AutoDSJ 贡献 / Contributing to AutoDSJ
 
-Thanks for improving AutoDSJ. Please keep the single supported CLI path (`autodsj.py`) and its scene-map, hierarchical-match, and delivery gates intact.
+AutoDSJ 由 **Dabao** 发起并维护。感谢你帮助改善项目。请保持唯一 CLI 入口 `autodsj.py`，以及场景地图、分层匹配和交付门禁完整。
+
+AutoDSJ was created and is maintained by **Dabao**. Thanks for helping improve it. Keep the single supported CLI path (`autodsj.py`) and its scene-map, hierarchical-match, and delivery gates intact.
 
 ## Development
 
 1. Create a focused branch from `master`.
 2. Run `python -m unittest discover -s tests -v`.
-3. If you change `skills/autodsj`, validate it and install/check it locally:
+3. Run the tests. If you change `skills/autodsj`, install and verify the canonical Skill locally:
 
 ```powershell
-python C:\Users\xxx13\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\autodsj
+python -m unittest discover -s tests -v
 python scripts\install_autodsj_skill.py --agent all
 python scripts\install_autodsj_skill.py --agent all --check
 ```
@@ -19,7 +21,7 @@ python scripts\install_autodsj_skill.py --agent all --check
 
 ## Skill contributions
 
-`skills/autodsj` is the canonical, cross-agent source. Do not hand-edit an installed copy under Codex, Hermes, OpenCode, or OpenClaw. The installer mirrors the canonical source to each agent root.
+`skills/autodsj` is the canonical, cross-agent source. Do not hand-edit an installed copy under Claude Code, Codex, Hermes, OpenCode, or OpenClaw. The installer mirrors the canonical source to each agent root.
 
 ## Security
 

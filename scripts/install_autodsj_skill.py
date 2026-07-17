@@ -22,12 +22,16 @@ def _home() -> Path:
 
 def default_target(agent: str) -> Path:
     home = _home()
-    app_data = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+    if os.name == "nt":
+        config_root = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+    else:
+        config_root = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
     local_app_data = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
     targets = {
+        "claude": home / ".claude" / "skills" / SKILL_NAME,
         "codex": Path(os.environ.get("CODEX_HOME", home / ".codex")) / "skills" / SKILL_NAME,
         "hermes": home / ".hermes" / "skills" / SKILL_NAME,
-        "opencode": app_data / "opencode" / "skills" / SKILL_NAME,
+        "opencode": config_root / "opencode" / "skills" / SKILL_NAME,
         "openclaw": home / ".openclaw" / "skills" / SKILL_NAME,
         "shared": home / ".agents" / "skills" / SKILL_NAME,
         "legacy-hermes": local_app_data / "hermes" / "skills" / "media" / SKILL_NAME,
@@ -61,14 +65,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Install or verify the AutoDSJ skill for AI coding agents.")
     parser.add_argument(
         "--agent",
-        choices=("codex", "hermes", "opencode", "openclaw", "shared", "legacy-hermes", "all"),
+        choices=("claude", "codex", "hermes", "opencode", "openclaw", "shared", "legacy-hermes", "all"),
         default="all",
     )
     parser.add_argument("--target", type=Path, help="Override the target skill directory (only with one agent).")
     parser.add_argument("--check", action="store_true", help="Only report drift; do not write files.")
     args = parser.parse_args()
 
-    agents = ("codex", "hermes", "opencode", "openclaw", "shared") if args.agent == "all" else (args.agent,)
+    agents = ("claude", "codex", "hermes", "opencode", "openclaw", "shared") if args.agent == "all" else (args.agent,)
     if args.target and len(agents) != 1:
         parser.error("--target requires exactly one --agent")
     return max(install(agent, args.target or default_target(agent), args.check) for agent in agents)

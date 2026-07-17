@@ -1,332 +1,239 @@
-# AutoDSJ 工作流
+# AutoDSJ — 大宝全自动智能电视剧解说剪辑神器
 
-## Agent Skill + Docker + Community
+> 把原片、字幕和解说文案放进去，让 AI 自动找准剧情画面、克隆配音、剪辑成片并生成发布资料。
+>
+> Turn raw drama footage, subtitles, and a recap script into a scene-accurate narrated video and a ready-to-publish delivery package.
 
-`skills/autodsj` is the canonical Agent Skill for Codex, Hermes, OpenCode, and OpenClaw. Install it from a checked-out repository; never edit an installed copy directly:
+[![CI](https://github.com/DaBaoAgent/AutoDSJ/actions/workflows/ci.yml/badge.svg)](https://github.com/DaBaoAgent/AutoDSJ/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/DaBaoAgent/AutoDSJ)](https://github.com/DaBaoAgent/AutoDSJ/releases)
+[![License](https://img.shields.io/github/license/DaBaoAgent/AutoDSJ)](LICENSE)
+[![Docker](https://img.shields.io/badge/GHCR-AutoDSJ-2496ED?logo=docker&logoColor=white)](https://github.com/DaBaoAgent/AutoDSJ/pkgs/container/autodsj)
+[![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Claude%20Code%20%7C%20Codex%20%7C%20Hermes%20%7C%20OpenClaw%20%7C%20OpenCode-6B4EFF)](skills/autodsj/SKILL.md)
+
+## 60 秒成品演示 / 60-Second Demo
+
+<!-- DEMO_PLACEHOLDER: 下一步放置演示视频或 GIF / Add demo video or GIF here. -->
+
+> 🎬 **演示视频/GIF 待添加。Demo video/GIF coming next.**
+
+## 输入和输出对比 / Input → Output
+
+| 输入 / Input | AutoDSJ | 输出 / Output |
+|---|---|---|
+| 电视剧或短剧原片 | 完整场景约束 + 字幕/剧本检索 + 选择性视觉复核 | `★ 成片.mp4` |
+| SRT/ASS 原片字幕 | 人物、事件、动作和镜头全局匹配 | `★ 字幕.srt`、匹配报告 |
+| TXT/MD/DOCX 解说文案 | Qwen 克隆配音、响度归一化、自动渲染 | 发布信息、剪映字幕、交付清单 |
+
+## 一键安装 / One-Command Install
+
+安装同名 `AutoDSJ` Skill 到 Claude Code、Codex、Hermes、OpenClaw、OpenCode 和通用 Agent 目录：
 
 ```powershell
-python scripts\install_autodsj_skill.py --agent all
-python scripts\install_autodsj_skill.py --agent all --check
+git clone https://github.com/DaBaoAgent/AutoDSJ.git; Set-Location AutoDSJ; python scripts\install_autodsj_skill.py --agent all
 ```
 
-Use `--agent codex|hermes|opencode|openclaw|shared` to install one target. `shared` installs to `~/.agents/skills`, which OpenCode and OpenClaw can discover as an agent-compatible root. The source remains versioned with the application, so every GitHub pull or push carries the matching skill.
-
-### Docker one-command setup
-
-Install and start Docker Desktop once, then run:
+Docker 一键自检 / One-command Docker check：
 
 ```powershell
 .\scripts\docker-doctor.ps1
 ```
 
-It creates local `data/` and `config/` directories, builds the image, and verifies the CLI. Put an episode folder below `data/`, then invoke the normal command through Docker:
+> ⭐ 如果 AutoDSJ 帮你少剪一条时间线，请点一个 **Star**。你的 Star 会让更多创作者搜到它。
+>
+> ⭐ If AutoDSJ saves you one manual timeline edit, please **Star this repository** so more creators can discover it.
+
+## 核心能力 / Core Features
+
+- **剧情级精准匹配 / Scene-accurate matching**：先锁定完整大场景，再在事件、物理镜头和动作瞬间中选画面，减少跨场景乱跳。
+- **混合证据检索 / Hybrid retrieval**：融合字幕、审校剧本、BM25、文本向量、人脸、可选声纹及云端视觉证据。
+- **全局连续解码 / Global sequence decoding**：按整段解说规划镜头顺序，而不是逐句贪心搜索。
+- **节省视觉调用 / Selective vision review**：按风险选择 60–240 帧进行云端复核，无需固定间隔扫描整集。
+- **克隆配音与自动渲染 / Voice cloning and rendering**：使用 Qwen 克隆音色，统一到 -16 LUFS，并保留所需原片对白。
+- **完整交付 / Publishing deliverables**：自动生成成片、字幕、匹配报告、发布文案、剪映字幕和交付清单。
+- **跨 Agent Skill / Reusable Agent Skill**：一份 `skills/autodsj` 同步给 Claude Code、Codex、Hermes、OpenClaw、OpenCode 等 Agent。
+- **Docker 与 GitHub 自动发布 / Docker and GitHub releases**：每次推送验证项目与 Skill；版本标签同步发布 Skill 包和 GHCR 镜像。
+
+## 30 秒快速开始 / 30-Second Quick Start
+
+### Docker
 
 ```powershell
+git clone https://github.com/DaBaoAgent/AutoDSJ.git
+Set-Location AutoDSJ
+.\scripts\docker-doctor.ps1
+```
+
+把单集素材放到 `data/episode-01/`，然后执行：
+
+```powershell
+docker compose run --rm autodsj prepare --folder /data/episode-01
 docker compose run --rm autodsj run --folder /data/episode-01 --hierarchical-match
 ```
 
-Configuration and source media stay on the host and are not included in the image or Git history. CI validates the skill, tests the project, and builds the Docker image on every pull request and push. Creating and pushing a `v*` tag additionally publishes a GitHub Release containing `autodsj-skill.tar.gz` and the matching `ghcr.io/<owner>/autodsj:<tag>` Docker image.
-
-面向电视剧、短剧解说的单线自动剪辑管线。正式成片只允许以下路径：
-
-`文案审校 → 字幕/剧本索引 → 完整大场景地图 → 事件/物理镜头索引 → 父段全局序列解码 → 60～240帧选择性云端视觉复核 → 场景门禁 → Qwen 克隆配音 → 渲染 → 发布交付门禁`
-
-核心原则不是在整集里逐句乱搜，也不是先做固定间隔的全片视觉扫描。先用 SRT、审校剧本和场景知识把整段解说缩到大场景/事件块，再以父段为单位做全局连续序列解码，最后按风险对歧义候选、动作镜头和场景覆盖点复核 60～240 帧。
-
-## 唯一正式管线
-
-- CLI 入口：`autodsj.py`
-- 匹配内核：`anchored_pipeline.py`
-- 配音后端：百炼 Qwen 克隆音色
-- 默认配音音量：100%
-- 默认原片对白音量：100%（与配音等响，手机正常音量直接播放）
-- 正式渲染必须启用 `--hierarchical-match`
-- 正式渲染必须存在通过校验的 `_scene_map.json`
-- 正式渲染成功后必须自动生成发布信息、剪映字幕和交付清单；缺任一交付物均视为失败
-- GPT-SoVITS、CosyVoice、系统音色和旧 UI 管线均不再属于本项目
-
-## 素材目录
-
-每一集单独一个目录，至少包含：
-
-```text
-第N集/
-├── 原片.mkv 或 原片.mp4
-├── 原片字幕.srt 或 ass
-├── 原片解说文案.txt / md / docx
-├── _scene_map.json                 # 正式渲染前强制存在
-├── _source_visual_index.json
-├── _source_shot_index.json
-├── _source_event_index.json
-├── _subtitle_event_index.json
-├── _source_voice_index.json          # 可选：CAM++ 说话人/角色声纹
-├── _selective_visual_plan.json       # 每集 60～240 帧云端复核计划
-├── ★ 分层接管预演报告.json
-├── ★ 成片.mp4
-├── ★ 字幕.srt
-├── ★ 匹配报告.json
-├── ★ 发布信息.txt
-├── ★ 剪映字幕导入.txt
-└── _AutoDSJ工作文件/                 # 场景图、索引、报告、TTS、SRT及交付清单
-```
-
-成片完成后，单集根目录只保留原片、原片字幕、源文案、成片、发布信息、剪映字幕导入文件和 `_AutoDSJ工作文件` 这一个工作目录。再次运行处理命令时会自动把工作文件恢复到根目录供旧内核复用，交付完成后重新归档。不要把最终成片当作新原片。
-
-## 标准执行顺序
-
-在项目目录执行：
+### 本地 Python / Local Python
 
 ```powershell
-cd D:\@kaifa\AutoDSJ\project
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe autodsj.py doctor
 ```
 
-### 1. 先审校文案
+Python 3.11+ 和 FFmpeg 为必需项。首次正式成片前需配置 API Key，并人工复核 `_scene_map.json`。
 
-必须先查看素材目录及其子目录里的文案，确认：
+Python 3.11+ and FFmpeg are required. Configure API keys and review `_scene_map.json` before the first production render.
 
-- 开头有冲突、悬念或结果前置，能在数秒内建立观看理由；
-- 每段只推进一个主要事件，人物姓名、关系、动作和因果正确；
-- “谁说话、谁接电话、谁走路、谁摔倒、谁吃饭”等主体明确；
-- 转折句确实承接下一大场景；
-- 角色名错字、同音字和字幕识别错误已修正。
-
-文案未通过时不得继续自动成片。
-
-### 2. 建立字幕/剧本与物理镜头基础
-
-新集优先使用并行准备命令：
+## Claude Code 使用方法 / Using with Claude Code
 
 ```powershell
-.\.venv\Scripts\python.exe autodsj.py prepare --folder "D:\自动剪辑\某剧\第N集"
+python scripts\install_autodsj_skill.py --agent claude
+python scripts\install_autodsj_skill.py --agent claude --check
 ```
 
-它会并行建立脚本表与物理镜头索引，继续生成事件索引、`_scene_map.draft.json`
-场景草案和自适应视觉复核计划，并以有界并发完成稀疏抽帧及批量视觉识别。视觉预算默认
-按风险在 60/90/120/180/240 帧间选择；只有显式传入 `--target-frames N` 才固定帧数。视觉完成后会
-自动把人物/动作描述回填到镜头及事件索引，不会重新检测镜头边界。
+安装位置：`~/.claude/skills/autodsj/SKILL.md`。在 Claude Code 中输入 `/autodsj`，或直接说：
 
-场景草案永远保持 `coverage_reviewed=false`，不会覆盖正式 `_scene_map.json`。必须人工核对
-边界、广告排除、名称、人物和父段计划后，另存为 `_scene_map.json` 并设置
-`coverage_reviewed=true`，正式渲染门禁没有放宽。
+> 用 AutoDSJ 处理 `D:\素材\第01集`，先检查素材和文案，再准备场景地图。
 
-需要只生成索引和场景草案、不调用视觉模型时：
+The Skill is installed at `~/.claude/skills/autodsj/SKILL.md`. Invoke `/autodsj` or ask Claude to prepare and edit an episode with AutoDSJ.
+
+## Codex 使用方法 / Using with Codex
 
 ```powershell
-.\.venv\Scripts\python.exe autodsj.py prepare --folder "D:\自动剪辑\某剧\第N集" --skip-visual
+python scripts\install_autodsj_skill.py --agent codex
+python scripts\install_autodsj_skill.py --agent codex --check
 ```
 
-以下分步命令仍可用于诊断：
+安装位置：`$CODEX_HOME/skills/autodsj`，未设置 `CODEX_HOME` 时使用 `~/.codex/skills/autodsj`。新任务中输入：
+
+> 使用 `$autodsj` 检查这一集的素材、场景地图和正式渲染门禁。
+
+The installer respects `$CODEX_HOME` and falls back to `~/.codex/skills/autodsj`.
+
+## Hermes 使用方法 / Using with Hermes
 
 ```powershell
-.\.venv\Scripts\python.exe autodsj.py preflight --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe autodsj.py script --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe autodsj.py shots --folder "D:\自动剪辑\某剧\第N集"
+python scripts\install_autodsj_skill.py --agent hermes
+python scripts\install_autodsj_skill.py --agent hermes --check
 ```
 
-先用 SRT、剧本和物理镜头关键图完成场景地图。不要为了建图恢复每 8～10 秒一帧的全片 VL 扫描。
+安装位置：`~/.hermes/skills/autodsj`。启动 Hermes 后使用 `/autodsj`，或让 Hermes 用 AutoDSJ 运行指定剧集。
 
-首次处理新集、尚无旧匹配报告时，可运行一次不渲染的引导匹配：
+The Skill is installed at `~/.hermes/skills/autodsj` and can be selected with `/autodsj`.
+
+## 其他 AI 编程软件和 Agent 使用方法 / Other AI Coding Agents
 
 ```powershell
-.\.venv\Scripts\python.exe autodsj.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --no-render
+python scripts\install_autodsj_skill.py --agent openclaw
+python scripts\install_autodsj_skill.py --agent opencode
+python scripts\install_autodsj_skill.py --agent shared
 ```
 
-`--no-render` 只用于生成基础报告，不代表通过正式门禁。
+| 软件 / Agent | 默认位置 / Default location | 调用方式 / Invocation |
+|---|---|---|
+| OpenClaw | `~/.openclaw/skills/autodsj` | 让 Agent 使用 `autodsj` Skill |
+| OpenCode | `~/.config/opencode/skills/autodsj`；Windows 为 `%APPDATA%\opencode\skills\autodsj` | `skill({ name: "autodsj" })` 或自然语言触发 |
+| 通用 Agent Skills | `~/.agents/skills/autodsj` | 支持 Agent Skills 标准的软件自动发现 |
 
-### 3. 建完整大场景地图
+所有平台共用同一份 [SKILL.md](skills/autodsj/SKILL.md)。内部标识按标准使用小写 `autodsj`，展示名称统一为 **AutoDSJ**。
 
-逐段查看完整原片时间轴，把正片中每一个完整大场景全部登记到 `_scene_map.json`。场景数量必须等于原片实际的大场景数量，不能只登记文案提到的几个场景。
+All platforms use the same canonical Skill. The standards-compliant identifier is `autodsj`; the human-facing name is **AutoDSJ**.
 
-最小结构：
-
-```json
-{
-  "version": 4,
-  "coverage_reviewed": true,
-  "coverage_ranges": [[150.0, 2665.0]],
-  "excluded_ranges": [[0.0, 150.0], [2665.0, 2835.0]],
-  "scene_count": 2,
-  "scenes": [
-    {
-      "name": "公司-玫瑰与庄国栋对质",
-      "ranges": [[150.0, 320.0]],
-      "characters": ["黄亦玫", "庄国栋"],
-      "keywords": ["公司", "对质", "关机"]
-    },
-    {
-      "name": "餐厅-庄国栋与母亲谈话",
-      "ranges": [[320.0, 500.0]],
-      "characters": ["庄国栋", "母亲"],
-      "keywords": ["餐厅", "母亲", "感情"]
-    }
-  ],
-  "parent_scene_plans": {
-    "1": [
-      {"from_shot": 1, "to_shot": 5, "scene": "公司-玫瑰与庄国栋对质"},
-      {"from_shot": 6, "to_shot": 6, "scene": "餐厅-庄国栋与母亲谈话"}
-    ]
-  },
-  "overrides": []
-}
-```
-
-硬性契约：
-
-1. `coverage_reviewed` 必须为 `true`。
-2. `scene_count` 必须与 `scenes` 数量一致。
-3. `coverage_ranges` 内不能有未归属场景的时间空洞。
-4. 每个大场景必须有唯一名称和合法时间范围。
-5. 每个解说镜头必须且只能命中一个 `parent_scene_plans` 组。
-6. 每段解说默认只允许一个主场景。
-7. 最多允许第二个场景，且只能位于连续尾句，镜头数必须少于主场景。
-8. 不允许“前场景→中间场景→第三场景”，也不允许短引子后整段跳到另一场景。
-9. 所有候选画面和最终裁切区间都必须包含在指定大场景内，不得用时间窗向场景外扩张。
-
-地图被修改后，旧接管预演的 SHA-256 会失效，必须重跑影子匹配，避免拿旧约束渲染。
-
-### 4. 建分层索引并影子匹配
+## 普通命令行使用方法 / Command-Line Usage
 
 ```powershell
-.\.venv\Scripts\python.exe autodsj.py events --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe autodsj.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
-.\.venv\Scripts\python.exe autodsj.py visual --folder "D:\自动剪辑\某剧\第N集" --target-frames 90
-.\.venv\Scripts\python.exe autodsj.py shadow-match --folder "D:\自动剪辑\某剧\第N集"
-```
-
-匹配层级固定为：
-
-`大场景 → 连续事件块 → 物理镜头 → 动作瞬间`
-
-候选证据按以下顺序工作：
-
-1. BM25 字面检索合并原片 SRT、场景人物/关键词和已审校剧本；
-2. `text-embedding-v4` 补足解说概括与字幕字面之间的语义差，事件和查询向量均按内容签名缓存；
-3. CAM++ 在 SRT 对白区间内与角色参考音频比对，提供“谁正在说话”的声纹证据；无需跑全片 VAD/聚类；
-4. 父段 Viterbi 解码整组候选，奖励同一/相邻事件的顺序推进，重罚倒序、跨大场景跳转；
-5. 只对动作、低分差歧义候选和每个大场景覆盖点调用云端视觉模型，单集硬限制 60～240 帧。
-
-`shadow-match` 会写出 `_selective_visual_plan.json`。候选、场景图或计划时间变化后，旧视觉索引会自动失效；重新执行 `visual` 后再跑一次 `shadow-match`，让识别结果进入最终候选。任何证据都只能在父场景内排序，不能把候选带出场景边界。
-
-可选声纹启用：
-
-```powershell
-uv pip install --python .\.venv\Scripts\python.exe -r requirements-audio.txt
-uv pip install --python .\.venv\Scripts\python.exe --no-deps speakerlab==0.0.6
-# 放置 <剧集根>\_voices\<角色名>\*.wav（每人至少一段干净对白）
-.\.venv\Scripts\python.exe autodsj.py voices --folder "D:\自动剪辑\某剧\第N集"
-```
-
-没有 `speakerlab` 或角色参考音频时，匹配器明确记录 `voice_index=false` 并继续使用字幕/剧本，不伪造角色声纹。
-
-检查以下报告：
-
-- `★ 分层影子匹配报告.json`
-- `★ 新旧匹配并排对比.json`
-- `★ 分层接管预演报告.json`
-
-必须确认 `unresolved=0`，且没有越界候选、缺失父段计划或第三场景跳转。时间线分配固定先尝试全局未用画面；只有父段内所有新候选都无法容纳配音时，才允许复用已引用的原片对白画面，并在 `planning_summary.source_reuse_fallback` 中计数。广告区是绝对硬禁区，人工覆盖、父段计划和复用降级均不得绕过。
-
-广告索引同时使用字幕商业话术和选择性视觉中的品牌/产品展示信号。审核出的广告必须从 `_scene_map.json.coverage_ranges` 与对应场景 `ranges` 中移除，并写入 `excluded_ranges`；修改广告区或场景图后必须重跑 `shadow-match`。
-
-### 5. 先预跑，再正式渲染
-
-```powershell
-.\.venv\Scripts\python.exe autodsj.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --no-render --hierarchical-match
-.\.venv\Scripts\python.exe autodsj.py run --folder "D:\自动剪辑\某剧\第N集" --skip-visual --hierarchical-match
-```
-
-正式命令缺少 `--hierarchical-match`、场景地图不完整、父段计划不连续或地图与预演摘要哈希不一致时，程序必须停止，不能降级到旧匹配器继续渲染。
-
-## 默认配置
-
-配置文件：`config/user_config.json`
-
-```json
-{
-  "voice": {
-    "mode": "clone",
-    "provider": "qwen",
-    "volume": 100,
-    "speech_rate": 1.0,
-    "pitch": 1.0
-  },
-  "drama": {
-    "keep_source_audio": true,
-    "source_play_volume": 100,
-    "narration_source_volume": 0
-  },
-  "visual": {
-    "selective_target_frames": 120,
-    "selective_min_frames": 60,
-    "selective_max_frames": 240
-  },
-  "matching": {
-    "use_dense_text": true,
-    "use_voice_evidence": true,
-    "voice_similarity_threshold": 0.48,
-    "max_event_candidates": 8
-  }
-}
-```
-
-配音和原片的纯增益固定为 100%，渲染时再分别通过 `loudnorm=I=-16:TP=-1.5:LRA=11` 统一听感响度；解说覆盖处原片声默认静音。不要用 120%/50% 的增益组合代替响度归一化。
-
-## AutoDSJ 技能同步
-
-Git 中的唯一技能源是 `skills/autodsj`，Hermes 目录只是部署副本。所有规则迭代必须先修改仓库版本、测试并提交，再单向同步：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\sync_autodsj_skill.py --sync
-.\.venv\Scripts\python.exe scripts\sync_autodsj_skill.py --check
-```
-
-默认目标为 `C:\Users\xxx13\AppData\Local\hermes\skills\media\autodsj`。`--check` 会比较相对路径和 SHA-256；缺失、多余或内容不同都会返回非零退出码，避免 Codex 与 Hermes 使用不同版本。
-
-## 清理规则
-
-完成渲染并验收后，可清理可重建产物：
-
-```powershell
-.\.venv\Scripts\python.exe autodsj.py clean --folder "D:\自动剪辑\某剧\第N集"
-```
-
-会删除：旧裁切片、拼接中间视频、旧配音 WAV/TTS 分段、诊断帧、渲染日志和临时清单。
-
-始终保留：
-
-- 原片、原字幕、用户文案；
-- `_scene_map.json`；
-- 选择性视觉、人脸、字幕/剧本、声纹、镜头、事件和文本嵌入索引；
-- 分层匹配审计报告；
-- `★ 成片.mp4`、`★ 字幕.srt`、`★ 匹配报告.json` 和发布文件。
-
-## 常用诊断
-
-```powershell
-.\.venv\Scripts\python.exe autodsj.py status --folder "D:\自动剪辑\某剧\第N集"
+# 环境检查 / Environment check
 .\.venv\Scripts\python.exe autodsj.py doctor
-.\.venv\Scripts\python.exe autodsj.py faces list --folder "D:\自动剪辑\某剧\第N集"
+
+# 检测素材 / Detect inputs
+.\.venv\Scripts\python.exe autodsj.py preflight --folder "D:\素材\第01集"
+
+# 建索引、场景草案和视觉复核计划 / Prepare indexes and scene draft
+.\.venv\Scripts\python.exe autodsj.py prepare --folder "D:\素材\第01集"
+
+# 影子匹配预演 / Preview hierarchical matching
+.\.venv\Scripts\python.exe autodsj.py shadow-match --folder "D:\素材\第01集"
+
+# 正式渲染 / Production render
+.\.venv\Scripts\python.exe autodsj.py run --folder "D:\素材\第01集" --hierarchical-match
+
+# 查看进度 / Inspect status
+.\.venv\Scripts\python.exe autodsj.py status --folder "D:\素材\第01集"
 ```
 
-画面不准时先检查大场景地图和父段计划，不要先扩大搜索时间窗。人物不准时补充 `_faces/<角色>/` 参考照并重建人脸库；动作不准时检查事件块与物理镜头关键帧。
+正式渲染要求完整且人工复核过的 `_scene_map.json`。详细执行规则在 [AutoDSJ Skill](skills/autodsj/SKILL.md) 中维护。
 
-## 主要模块
+A reviewed `_scene_map.json` is mandatory for production rendering. The canonical workflow lives in the AutoDSJ Skill.
 
-```text
-autodsj.py                           唯一 CLI 入口与正式门禁
-anchored_pipeline.py            Qwen 配音、受约束时间线与渲染
-backend/scene_map.py            完整场景地图校验与哈希门禁
-backend/narration_intent.py     结构化人物/动作/地点/转场意图
-backend/shot_index.py           物理镜头和多关键帧索引
-backend/event_index.py          大场景内连续事件块
-backend/text_retriever.py       SRT/审校剧本 BM25＋向量混合检索
-backend/voice_index.py          本地 CAM++ 字幕区间角色声纹证据
-backend/sequence_decoder.py     父段候选 Viterbi 全局序列解码
-backend/selective_visual.py     候选驱动 60～240 帧云端视觉复核计划
-backend/hierarchical_matcher.py 分层候选与影子报告
-backend/timeline_planner.py     主场景/尾句承接计划
-backend/cleanup.py              安全清理可重建产物
+## 效果案例 / Example Results
+
+| 场景 / Scenario | 输入 / Input | 自动产物 / Generated result |
+|---|---|---|
+| 单集电视剧解说 | 原片 + 字幕 + 解说文案 | 配音成片、字幕、匹配报告、发布信息 |
+| 画面匹配纠错 | 已有场景图、索引和问题文案 | 分层影子报告、新旧候选对比、修正后的成片 |
+| 多集连续制作 | 每集独立素材目录 | 可复用索引、按集交付包、统一发布资料 |
+
+公开演示素材和输入/输出截图将在 60 秒演示中补充。使用者必须确保拥有输入视频、字幕、声音和发布内容的合法授权。
+
+Public demo assets and before/after screenshots will be added with the 60-second demo. Users are responsible for rights to all footage, subtitles, voices, and published content.
+
+## 配置说明 / Configuration
+
+本地配置写入 `config/user_config.json`；API Key 加密保存在本地，且已被 Git 忽略：
+
+```powershell
+.\.venv\Scripts\python.exe autodsj.py set-key --dashscope "YOUR_DASHSCOPE_KEY"
+.\.venv\Scripts\python.exe autodsj.py set-key --siliconflow "YOUR_SILICONFLOW_KEY"
+.\.venv\Scripts\python.exe autodsj.py set --resolution 1080P
+.\.venv\Scripts\python.exe autodsj.py config
 ```
 
-任何新功能都应接入这条管线；不得另建平行渲染入口或静默回退到无场景约束的匹配方式。
+| 配置 / Setting | 默认值 / Default | 说明 / Notes |
+|---|---:|---|
+| `voice.provider` | `qwen` | 百炼 Qwen 克隆音色 / Qwen voice cloning |
+| `voice.volume` | `100` | 配音纯增益；渲染时再做响度归一化 |
+| `drama.source_play_volume` | `100` | 原片对白纯增益 |
+| `visual.selective_min_frames` | `60` | 单集选择性视觉复核下限 |
+| `visual.selective_max_frames` | `240` | 单集选择性视觉复核上限 |
+| 输出响度 / Loudness | `-16 LUFS` | 配音和原片分别归一化 |
+
+不要提交 `.env`、`config/user_config.json`、密钥、原片、声音样本或生成视频。
+
+Never commit `.env`, `config/user_config.json`, API keys, source footage, voice samples, or generated videos.
+
+## 路线图 / Roadmap
+
+- [x] 完整场景地图与正式渲染门禁 / Reviewed scene-map gate
+- [x] 字幕、剧本、向量、人脸和可选声纹混合检索 / Hybrid evidence retrieval
+- [x] 父段全局序列解码与选择性视觉复核 / Global decoding and selective vision review
+- [x] Claude Code、Codex、Hermes、OpenClaw、OpenCode 同名 Skill / Cross-agent Skill
+- [x] Docker Compose、GitHub Actions、Release 和 GHCR / Automated packaging and releases
+- [ ] 60 秒公开演示视频与可复现实例 / Public 60-second demo and reproducible sample
+- [ ] Linux/macOS 端到端实测与安装脚本 / End-to-end Linux and macOS validation
+- [ ] 更多影视类型、语言和配音提供商 / More genres, languages, and voice providers
+
+欢迎通过 Issue 提交需求，通过 Pull Request 认领路线图任务。
+
+Open an Issue for feature requests or a Pull Request to help complete the roadmap.
+
+## 贡献指南 / Contributing
+
+项目由 **Dabao** 发起并维护。社区贡献请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [SECURITY.md](SECURITY.md)。
+
+AutoDSJ was created and is maintained by **Dabao**. Read the contribution and security guidelines before opening a pull request.
+
+每次修改 `skills/autodsj` 后必须验证并同步安装副本：
+
+```powershell
+python -m unittest discover -s tests -v
+python scripts\install_autodsj_skill.py --agent all
+python scripts\install_autodsj_skill.py --agent all --check
+```
+
+Repository topics / 搜索关键词：`ai-video-editing`, `drama-recap`, `automatic-video-editing`, `agent-skill`, `claude-code`, `codex`, `hermes-agent`, `openclaw`, `opencode`, `docker`, `ffmpeg`, `qwen`.
+
+## License
+
+[MIT License](LICENSE) © 2026 **Dabao**.
+
+如果你在自己的项目、教程或视频中使用 AutoDSJ，欢迎保留项目链接并告诉我们你的作品。
+
+If you use AutoDSJ in a project, tutorial, or video, attribution and a link back to this repository are appreciated.

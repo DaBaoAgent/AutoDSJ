@@ -4,7 +4,7 @@
 
 ## 复用包内容
 
-- `autodsj/`：Codex 技能，复制到 `%USERPROFILE%\.codex\skills\autodsj`。
+- `autodsj/`：同名 AutoDSJ Skill，可安装到 Claude Code、Codex、Hermes、OpenClaw、OpenCode 和通用 Agent Skills 目录。
 - `AutoDSJ.bundle`：包含完整 Git 历史的项目源码包。
 - `安装到另一台电脑.ps1`：安装技能、克隆项目并创建 Python 虚拟环境。
 
@@ -18,7 +18,7 @@
 powershell -ExecutionPolicy Bypass -File .\安装到另一台电脑.ps1
 ```
 
-默认项目安装到 `%USERPROFILE%\AutoDSJ`，技能安装到 `%USERPROFILE%\.codex\skills\autodsj`。可用 `-ProjectPath "D:\AutoDSJ"` 改项目位置；需要 CAM++ 时增加 `-InstallAudio`。
+默认项目安装到 `%USERPROFILE%\AutoDSJ`，并把 Skill 安装到所有支持的 Agent。可用 `-Agent codex` 或 `-Agent claude,codex` 只选择部分目标；用 `-ProjectPath "D:\AutoDSJ"` 改项目位置；需要 CAM++ 时增加 `-InstallAudio`。
 
 随后执行：
 

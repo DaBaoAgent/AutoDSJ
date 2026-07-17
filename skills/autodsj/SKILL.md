@@ -1,13 +1,13 @@
 ---
 name: autodsj
-description: Windows 上的 AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”、要求排查解说画面不准、建场景地图或复跑影视剪辑时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和60～240帧选择性云端视觉复核。
+description: AutoDSJ 电视剧/短剧全自动解说剪辑工作流。用户说“AutoDSJ”“剪辑某剧”“跑第N集”“出成片”，或 asks to automate drama recap video editing, diagnose mismatched visuals, build a scene map, or rerun an episode 时使用。强制使用完整大场景地图、字幕/剧本混合检索、父段全局序列解码和60～240帧选择性云端视觉复核。
 ---
 
 # AutoDSJ 工作流
 
 ## 唯一技能源与同步
 
-只修改 Git 仓库中的 `skills/autodsj`。它是 Codex、Hermes、OpenCode 和 OpenClaw 共用的唯一源；不得把任一 Agent 的部署目录当作源文件直接迭代。每次修改后先校验并提交 Git，再运行：
+只修改 Git 仓库中的 `skills/autodsj`。它是 Claude Code、Codex、Hermes、OpenCode 和 OpenClaw 共用的唯一源；不得把任一 Agent 的部署目录当作源文件直接迭代。每次修改后先校验并提交 Git，再运行：
 
 ```powershell
 cd <AutoDSJ 仓库根目录>
@@ -15,7 +15,7 @@ python scripts\install_autodsj_skill.py --agent all
 python scripts\install_autodsj_skill.py --agent all --check
 ```
 
-安装器按每个文件 SHA-256 镜像校验目标目录。可传入 `--agent codex|hermes|opencode|openclaw|shared` 只安装一个 Agent；`shared` 写入 `~/.agents/skills`，适合 OpenCode/OpenClaw 的通用发现路径。旧 Hermes 目录仅在必须兼容既有安装时使用 `--agent legacy-hermes`。
+安装器按每个文件 SHA-256 镜像校验目标目录。可传入 `--agent claude|codex|hermes|opencode|openclaw|shared` 只安装一个 Agent；`shared` 写入 `~/.agents/skills`，适合 OpenCode/OpenClaw 的通用发现路径。旧 Hermes 目录仅在必须兼容既有安装时使用 `--agent legacy-hermes`。
 
 项目根目录和 Python 环境必须从当前工作区发现，不得照抄任何机器的绝对路径。换电脑或项目路径变化时，先读 [portable-deployment.md](references/portable-deployment.md)。
 

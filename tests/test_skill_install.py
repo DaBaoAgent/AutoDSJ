@@ -11,8 +11,11 @@ from scripts.install_autodsj_skill import default_target
 class SkillInstallTests(unittest.TestCase):
     def test_all_supported_agent_targets_end_with_skill_name(self):
         with patch.dict(os.environ, {}):
-            for agent in ("codex", "hermes", "opencode", "openclaw", "shared", "legacy-hermes"):
+            for agent in ("claude", "codex", "hermes", "opencode", "openclaw", "shared", "legacy-hermes"):
                 self.assertEqual(default_target(agent).name, "autodsj")
+
+    def test_claude_uses_personal_skill_root(self):
+        self.assertEqual(default_target("claude").parts[-3:], (".claude", "skills", "autodsj"))
 
     def test_codex_respects_codex_home(self):
         with patch.dict(os.environ, {"CODEX_HOME": r"C:\\custom-codex"}):

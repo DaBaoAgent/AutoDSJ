@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skills" / "autodsj"
-DEFAULT_OUTPUT = Path(r"E:\Codex-DY全自动剪辑复用包")
+DEFAULT_OUTPUT = Path(r"E:\AutoDSJ跨Agent复用包")
 
 
 def export_package(output: Path) -> dict:
@@ -32,7 +32,7 @@ def export_package(output: Path) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="导出不含密钥和素材的 DY Codex 跨电脑复用包")
+    parser = argparse.ArgumentParser(description="导出不含密钥和素材的 AutoDSJ 跨 Agent、跨电脑复用包")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     result = export_package(args.output)

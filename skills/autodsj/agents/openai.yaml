@@ -1,4 +1,4 @@
 interface:
   display_name: "AutoDSJ"
-  short_description: "完整场景约束、混合检索、智能匹配与自动发布交付的影视剪辑"
-  default_prompt: "Use $autodsj to run the full constrained drama-editing workflow and deliver a clean release package."
+  short_description: "AutoDSJ：场景约束驱动的电视剧/短剧自动解说剪辑"
+  default_prompt: "Use $autodsj to create a drama recap with scene-constrained matching, cloned narration, rendering, and release deliverables."
