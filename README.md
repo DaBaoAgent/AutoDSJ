@@ -12,9 +12,9 @@
 
 ## 60 秒成品演示 / 60-Second Demo
 
-<!-- DEMO_PLACEHOLDER: 下一步放置演示视频或 GIF / Add demo video or GIF here. -->
+<video src="https://github.com/DaBaoAgent/AutoDSJ/releases/download/v0.2.1/autodsj.mp4" controls width="100%"></video>
 
-> 🎬 **演示视频/GIF 待添加。Demo video/GIF coming next.**
+[▶️ 播放或下载 AutoDSJ 60 秒成品演示 / Watch or download the 60-second demo](https://github.com/DaBaoAgent/AutoDSJ/releases/download/v0.2.1/autodsj.mp4)
 
 ## 输入和输出对比 / Input → Output
 
