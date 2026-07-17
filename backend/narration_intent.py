@@ -79,15 +79,39 @@ def _required_visible_characters(text: str, people: list[str], subject: str) -> 
         return people
     co_presence_words = ("\u4e24\u4eba", "\u4e8c\u4eba", "\u4e00\u8d77", "\u540c\u6846",
                          "\u5f7c\u6b64", "\u76f8\u62e5", "\u7275\u624b", "\u62c9\u624b")
-    connector = any(
-        re.search(rf"{re.escape(left)}.{{0,2}}(?:\u548c|\u4e0e|\u8ddf|\u3001).{{0,2}}{re.escape(right)}", text)
-        or re.search(rf"{re.escape(right)}.{{0,2}}(?:\u548c|\u4e0e|\u8ddf|\u3001).{{0,2}}{re.escape(left)}", text)
-        for index, left in enumerate(people) for right in people[index + 1:]
-    )
+    connected: set[str] = set()
+    for index, left in enumerate(people):
+        for right in people[index + 1:]:
+            if (re.search(rf"{re.escape(left)}.{{0,2}}(?:\u548c|\u4e0e|\u8ddf|\u3001).{{0,2}}{re.escape(right)}", text)
+                    or re.search(rf"{re.escape(right)}.{{0,2}}(?:\u548c|\u4e0e|\u8ddf|\u3001).{{0,2}}{re.escape(left)}", text)):
+                connected.update((left, right))
+    if connected:
+        return [person for person in people if person in connected]
     transitive = "\u628a" in text or "\u88ab" in text
-    if connector or transitive or any(word in text for word in co_presence_words):
+    if transitive or any(word in text for word in co_presence_words):
         return people
     return [subject] if subject else people[:1]
+
+
+def _required_visible_locations(text: str, locations: list[str]) -> list[str]:
+    """Keep location words useful for retrieval without over-constraining aspirations.
+
+    For example, ``想开一家自己的公司`` is visibly said beside a pool; ``公司``
+    describes the future goal, not the current frame location.  Canonical place
+    names and explicit arrival/presence grammar remain hard requirements.
+    """
+    required: list[str] = []
+    arrival = "(?:在|来到|进入|走进|回到|赶到|坐在|站在|身处)"
+    suffix = "(?:里|内|中|边|旁|现场)"
+    for name in locations:
+        aliases = [name, *LOCATION_VOCAB.get(name, "").split()]
+        if name in text or any(
+            re.search(rf"{arrival}.{{0,6}}{re.escape(term)}", text)
+            or re.search(rf"{re.escape(term)}{suffix}", text)
+            for term in aliases if term
+        ):
+            required.append(name)
+    return list(dict.fromkeys(required))
 
 
 def parse_intent(text: str, *, previous_subject: str = "") -> dict:
@@ -111,6 +135,7 @@ def parse_intent(text: str, *, previous_subject: str = "") -> dict:
                     if any(term in text for term in HARD_ACTION_TERMS.get(item, "").split())]
     required_characters = _required_visible_characters(text, people, subject)
     positive_locations = [item for item in locations if item not in must_not_have]
+    hard_locations = _required_visible_locations(text, positive_locations)
     positive_objects = [item for item in objects if item not in must_not_have]
     expanded = " ".join([
         text, subject, *people, *positive_actions, *positive_locations, *positive_objects,
@@ -119,7 +144,7 @@ def parse_intent(text: str, *, previous_subject: str = "") -> dict:
         *(OBJECT_VOCAB[obj] for obj in positive_objects),
     ]).strip()
     must_have = list(dict.fromkeys([
-        *required_characters, *hard_actions, *positive_locations, *positive_objects,
+        *required_characters, *hard_actions, *hard_locations, *positive_objects,
     ]))
     temporal_type = "action_sequence" if any(action in TEMPORAL_ACTIONS for action in hard_actions) else "single_frame"
     return {
@@ -136,7 +161,7 @@ def parse_intent(text: str, *, previous_subject: str = "") -> dict:
         "hard_requirements": {
             "characters": required_characters,
             "actions": hard_actions,
-            "locations": positive_locations,
+            "locations": hard_locations,
             "objects": positive_objects,
         },
         "requires_candidate_review": bool(

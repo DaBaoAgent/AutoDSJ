@@ -160,9 +160,6 @@ def check_semantic_match(narration_text: str, frame: dict | None) -> tuple[bool,
 
 def audit_episode(folder: Path) -> dict:
     """对单集执行完整质检."""
-    match = load_json(folder / "_AutoDSJ工作文件" / "★ 匹配报告.json")
-
-    # ── 加载辅助数据（优先 _AutoDSJ工作文件/，回退根目录） ──
     def _find_json(*paths: str) -> Path | None:
         for p in paths:
             fp = folder / p
@@ -170,16 +167,38 @@ def audit_episode(folder: Path) -> dict:
                 return fp
         return None
 
-    vi_path = _find_json("_AutoDSJ工作文件/_source_visual_index.json", "_source_visual_index.json")
+    # 新工作区优先；根目录是正式 run 的最新镜像；最后兼容旧 _DY 工作区。
+    match_path = _find_json(
+        "_AutoDSJ工作文件/★ 匹配报告.json",
+        "★ 匹配报告.json",
+        "_DY工作文件/★ 匹配报告.json",
+    )
+    if match_path is None:
+        raise FileNotFoundError(f"未找到匹配报告：{folder}")
+    match = load_json(match_path)
+
+    vi_path = _find_json(
+        "_AutoDSJ工作文件/_source_visual_index.json",
+        "_source_visual_index.json",
+        "_DY工作文件/_source_visual_index.json",
+    )
     frames = load_json(vi_path).get("frames", []) if vi_path else []
 
-    ad_path = _find_json("_AutoDSJ工作文件/_source_ad_intervals.json", "_source_ad_intervals.json")
+    ad_path = _find_json(
+        "_AutoDSJ工作文件/_source_ad_intervals.json",
+        "_source_ad_intervals.json",
+        "_DY工作文件/_source_ad_intervals.json",
+    )
     ad_intervals = []
     if ad_path:
         ad = load_json(ad_path)
         ad_intervals = [(i["start"], i["end"]) for i in ad.get("intervals", [])]
 
-    sm_path = _find_json("_AutoDSJ工作文件/_scene_map.json", "_scene_map.json")
+    sm_path = _find_json(
+        "_AutoDSJ工作文件/_scene_map.json",
+        "_scene_map.json",
+        "_DY工作文件/_scene_map.json",
+    )
     sm = load_json(sm_path) if sm_path else None
     excluded = sm.get("excluded_ranges", []) if sm else []
 

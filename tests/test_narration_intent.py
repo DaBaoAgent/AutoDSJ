@@ -56,3 +56,16 @@ class NarrationIntentTests(unittest.TestCase):
     def test_explicit_pair_still_requires_both_characters(self):
         value = parse_intent("可看到玫瑰和方协文")
         self.assertEqual(value["hard_requirements"]["characters"], ["玫瑰", "方协文"])
+
+    def test_context_character_is_not_required_in_explicit_pair_shot(self):
+        value = parse_intent("苏更生出差期间，黄振华再次和白晓荷见面")
+        self.assertEqual(value["hard_requirements"]["characters"], ["黄振华", "白晓荷"])
+
+    def test_future_company_aspiration_is_not_current_location(self):
+        value = parse_intent("他想开一家自己的公司", previous_subject="方协文")
+        self.assertIn("办公室", value["locations"])
+        self.assertEqual(value["hard_requirements"]["locations"], [])
+
+    def test_explicit_arrival_at_company_remains_hard_location(self):
+        value = parse_intent("再次来到蜻蜓公司谈合作")
+        self.assertEqual(value["hard_requirements"]["locations"], ["办公室"])

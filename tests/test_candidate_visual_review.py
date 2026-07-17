@@ -42,6 +42,14 @@ class CandidateVisualReviewTests(unittest.TestCase):
             ("b", 1), ("b", 3), ("b", 4), ("b", 5), ("b", 7),
         ])
 
+    def test_single_frame_transport_fallback_uses_candidate_midpoint(self):
+        images = [{"candidate_id": candidate, "position": position}
+                  for candidate in ("a", "b") for position in range(1, 4)]
+        reduced = _limit_images_per_candidate(images, 1)
+        self.assertEqual([(item["candidate_id"], item["position"]) for item in reduced], [
+            ("a", 2), ("b", 2),
+        ])
+
     def test_escalation_sampling_adds_near_boundary_frames(self):
         self.assertEqual(_sample_times(0, 10, 7), [0.8, 2.2, 3.6, 5.0, 6.4, 7.8, 9.2])
 

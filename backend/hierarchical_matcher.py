@@ -28,6 +28,13 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text("utf-8"))
 
 
+def _load_optional(path: Path) -> dict:
+    """Load a cached JSON artifact, treating a missing legacy artifact as empty."""
+    if not path.exists():
+        return {}
+    return _load(path)
+
+
 def _event_text(event: dict) -> str:
     parts = [event.get("scene", ""), event.get("subtitle_text", ""),
              " ".join(event.get("people_evidence", []))]
@@ -163,7 +170,10 @@ def build_shadow_report(folder: Path, matching: object | None = None,
     # those new rankings would create an endless plan -> index -> plan loop.
     # A reviewed scene-map change is the exception and deliberately invalidates
     # the lock so the generic coverage can be rebuilt.
-    existing_visual_plan = _load(folder / "_selective_visual_plan.json")
+    # Legacy episode workspaces may have a complete visual index created before
+    # selective plans were introduced.  Missing plan metadata must trigger a
+    # fresh plan build, not abort migration of the episode.
+    existing_visual_plan = _load_optional(folder / "_selective_visual_plan.json")
     plan_scene_sha = str(existing_visual_plan.get("scene_map_sha256") or "")
     visual_plan_ready_before = (
         visual_index_matches_plan(folder)

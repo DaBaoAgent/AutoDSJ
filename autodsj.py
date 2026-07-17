@@ -291,7 +291,9 @@ def cmd_quality(args: argparse.Namespace) -> None:
     folder = Path(settings.material_folder)
     from scripts.audit_quality import audit_episode, suggest_fixes
     report = audit_episode(folder)
-    print(f"质检完成：{folder / '_quality_audit.json'}")
+    report_path = folder / "_quality_audit.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"质检完成：{report_path}")
     print(f"  总分镜：{report['stats'].get('total_narration', 0)}")
     print(f"  CRITICAL: {report['critical_count']}")
     print(f"  HIGH:     {report['high_count']}")

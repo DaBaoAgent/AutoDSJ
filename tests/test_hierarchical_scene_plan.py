@@ -1,9 +1,20 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from backend.hierarchical_matcher import _parent_scene_hint, _resolve_scene_hint, _scene_hint
+from backend.hierarchical_matcher import (
+    _load_optional,
+    _parent_scene_hint,
+    _resolve_scene_hint,
+    _scene_hint,
+)
 
 
 class HierarchicalScenePlanTests(unittest.TestCase):
+    def test_missing_optional_cache_loads_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.assertEqual(_load_optional(Path(temp_dir) / "missing.json"), {})
+
     def setUp(self):
         self.scene_map = {
             "scenes": [

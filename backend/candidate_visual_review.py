@@ -70,6 +70,9 @@ def _limit_images_per_candidate(images: list[dict], limit: int) -> list[dict]:
         if len(values) <= limit:
             output.extend(values)
             continue
+        if limit <= 1:
+            output.append(values[len(values) // 2])
+            continue
         indexes = [round(index * (len(values) - 1) / (limit - 1)) for index in range(limit)]
         output.extend(values[index] for index in indexes)
     return output
